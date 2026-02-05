@@ -1,0 +1,544 @@
+// src/pages/Dashboard.tsx
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { AppData } from "../data/models";
+import { loadData as loadLocalData, upsertInventoryItem as upsertLocalInventory } from "../data/store";
+import { supabase } from "../lib/supabaseClient";
+
+import {
+  loadDataFromDB,
+  isDBEmpty,
+  migrateLocalToDBOnce,
+  upsertInventoryItemDB,
+} from "../data/store.supabase";
+
+type DashView = "inventory" | "todo";
+
+const LOW_STOCK_THRESHOLD = 2;
+const RESTOCK_TO = 5;
+
+// 제작 리스트의 "합계" 탭을 위한 특수 ID
+const ALL_TAB_ID = "__ALL__";
+
+const DASH = {
+  inventory: "inventory",
+  todo: "todo",
+} as const;
+
+export default function Dashboard() {
+  // ✅ 화면 상단 탭(대시보드/마스터)
+
+  // ✅ 데이터(초기엔 로컬 표시)
+  const [data, setData] = useState<AppData>(() => loadLocalData());
+
+  // ✅ DB 로드 상태
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // ✅ 화면 상태
+  const [selectedStoreId, setSelectedStoreId] = useState<string>("");
+  const [dashView, setDashView] = useState<DashView>(DASH.inventory);
+
+  // -----------------------------
+  // 1) DB에서 최신 데이터 로드 함수
+  // -----------------------------
+  const refreshFromDB = useCallback(async () => {
+    const dbData = await loadDataFromDB();
+    setData(dbData);
+
+    // 선택 입점처 기본값(아무것도 없으면 첫 매장)
+    if (dbData.stores.length > 0) {
+      setSelectedStoreId((prev) => prev || dbData.stores[0].id);
+    }
+    
+  }, []);
+
+  // -----------------------------
+  // 2) 최초 진입 시: DB 비었으면 마이그레이션 + 로드
+  // -----------------------------
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      console.log("[DB] start");
+      try {
+        setLoading(true);
+        setErrorMsg(null);
+
+        console.log("[DB] check empty...");
+        const empty = await isDBEmpty();
+        console.log("[DB] empty =", empty);
+
+        if (empty) {
+          console.log("[DB] migrate start...");
+          await migrateLocalToDBOnce();
+          console.log("[DB] migrate done");
+        }
+
+        console.log("[DB] loadDataFromDB start...");
+        const dbData = await loadDataFromDB();
+        console.log("[DB] loadDataFromDB done", {
+          products: dbData.products.length,
+          stores: dbData.stores.length,
+          inv: dbData.inventory.length,
+          sps: dbData.storeProductStates.length,
+        });
+
+        if (!alive) return;
+
+        setData(dbData);
+
+        if (dbData.stores.length > 0) {
+          setSelectedStoreId((prev) => prev || dbData.stores[0].id);
+        }
+      } catch (e: any) {
+        console.error("[DB] error", e);
+        if (!alive) return;
+        setErrorMsg(e?.message ?? String(e));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // -----------------------------
+  // 3) ✅ Realtime 구독(4개 테이블) → 변경 시 refreshFromDB()
+  // -----------------------------
+  useEffect(() => {
+    let active = true;
+    let timer: number | null = null;
+
+    const scheduleRefresh = () => {
+      if (!active) return;
+      if (timer) window.clearTimeout(timer);
+
+      // 이벤트 폭주 디바운스
+      timer = window.setTimeout(() => {
+        refreshFromDB().catch((e) => console.error("[RT] refresh error", e));
+      }, 250);
+    };
+
+    console.log("[RT] subscribe start");
+
+    const channel = supabase
+      .channel("shop-planner-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "products" }, scheduleRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "stores" }, scheduleRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "inventory" }, scheduleRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "store_product_states" }, scheduleRefresh)
+      .subscribe((status) => {
+        console.log("[RT] status =", status);
+      });
+
+    return () => {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+      supabase.removeChannel(channel);
+      console.log("[RT] unsubscribed");
+    };
+  }, [refreshFromDB]);
+
+  // -----------------------------
+  // 4) derived 값들
+  // -----------------------------
+  const stores = useMemo(
+    () => [...data.stores].sort((a, b) => b.createdAt - a.createdAt),
+    [data.stores]
+  );
+
+  // ✅ 입점처별 제품 활성화 여부
+  const isEnabledInStore = useCallback(
+    (storeId: string, productId: string) => {
+      const hit = data.storeProductStates?.find((x) => x.storeId === storeId && x.productId === productId);
+      return hit?.enabled ?? true; // 기본값: 설정 없으면 활성
+    },
+    [data.storeProductStates]
+  );
+
+  const products = useMemo(() => {
+    return [...data.products]
+      .filter((p) => p.active)
+      .sort((a, b) => {
+        const c = (a.category ?? "").localeCompare(b.category ?? "");
+        if (c !== 0) return c;
+        return a.name.localeCompare(b.name);
+      });
+  }, [data.products]);
+
+  const visibleProductsForSelectedStore = useMemo(() => {
+    if (!selectedStoreId) return products;
+    if (selectedStoreId === ALL_TAB_ID) return products;
+    return products.filter((p) => isEnabledInStore(selectedStoreId, p.id));
+  }, [products, selectedStoreId, isEnabledInStore]);
+
+  // inventory index: storeId::productId -> onHandQty
+  const invIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const it of data.inventory) {
+      m.set(`${it.storeId}::${it.productId}`, it.onHandQty);
+    }
+    return m;
+  }, [data.inventory]);
+
+  const getOnHandQty = useCallback(
+    (storeId: string, productId: string) => {
+      return invIndex.get(`${storeId}::${productId}`) ?? 0;
+    },
+    [invIndex]
+  );
+
+  // 선택 입점처 총 재고
+  const totalOnHand = useMemo(() => {
+    if (!selectedStoreId || selectedStoreId === ALL_TAB_ID) return 0;
+    let sum = 0;
+    for (const it of data.inventory) {
+      if (it.storeId === selectedStoreId) sum += it.onHandQty;
+    }
+    return sum;
+  }, [data.inventory, selectedStoreId]);
+
+  // 선택 입점처 제작 리스트
+  const storeTodoRows = useMemo(() => {
+    if (!selectedStoreId || selectedStoreId === ALL_TAB_ID) return [];
+
+    return visibleProductsForSelectedStore
+      .map((p) => {
+        const onHand = getOnHandQty(selectedStoreId, p.id);
+        const need = onHand <= LOW_STOCK_THRESHOLD ? Math.max(0, RESTOCK_TO - onHand) : 0;
+        return { product: p, onHand, need };
+      })
+      .filter((row) => row.need > 0);
+  }, [selectedStoreId, visibleProductsForSelectedStore, getOnHandQty]);
+
+  // 전체 제작 리스트(합계)
+  const allTodoRows = useMemo(() => {
+    const out: Array<{ product: (typeof products)[number]; totalNeed: number }> = [];
+
+    for (const p of products) {
+      let sumNeed = 0;
+
+      for (const s of stores) {
+        if (!isEnabledInStore(s.id, p.id)) continue;
+        const onHand = getOnHandQty(s.id, p.id);
+        if (onHand <= LOW_STOCK_THRESHOLD) {
+          sumNeed += Math.max(0, RESTOCK_TO - onHand);
+        }
+      }
+
+      if (sumNeed > 0) out.push({ product: p, totalNeed: sumNeed });
+    }
+
+    return out;
+  }, [products, stores, isEnabledInStore, getOnHandQty]);
+
+  // 제작 리스트 화면 기본은 합계 탭
+  useEffect(() => {
+    if (dashView === DASH.todo && !selectedStoreId) {
+      setSelectedStoreId(ALL_TAB_ID);
+    }
+  }, [dashView, selectedStoreId]);
+
+  // -----------------------------
+  // 5) 화면 렌더
+  // -----------------------------
+  if (loading) {
+    return (
+      <div style={{ padding: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Shop Planner</div>
+        DB에서 데이터를 불러오는 중...
+      </div>
+    );
+  }
+
+  if (errorMsg) {
+    return (
+      <div style={{ padding: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Shop Planner</div>
+        <h2 style={{ marginTop: 0 }}>DB 로드 실패</h2>
+        <div style={{ padding: 12, background: "#f3f4f6", borderRadius: 8 }}>{errorMsg}</div>
+        <button
+          style={{ marginTop: 12 }}
+          onClick={() => {
+            setErrorMsg(null);
+            setLoading(true);
+            refreshFromDB()
+              .catch((e) => setErrorMsg(e?.message ?? String(e)))
+              .finally(() => setLoading(false));
+          }}
+        >
+          다시 시도
+        </button>
+      </div>
+    );
+  }
+
+  // ✅ 대시보드 페이지
+  return (
+    <div>
+      <h2 className="pageTitle">대시보드</h2>
+
+      <div className="summaryRow">
+        <Card title="입점처" value={`${stores.length}`} />
+        <Card title="활성 제품" value={`${products.length}`} />
+        <Card title="선택 입점처 총 재고" value={`${totalOnHand}`} />
+      </div>
+
+      {/* 화면 전환 버튼 */}
+      <div className="viewSwitch">
+        <button
+          type="button"
+          className={`viewBtn ${dashView === DASH.inventory ? "viewBtnActive" : ""}`}
+          onClick={() => setDashView(DASH.inventory)}
+        >
+          재고 현황
+        </button>
+
+        <button
+          type="button"
+          className={`viewBtn ${dashView === DASH.todo ? "viewBtnActive" : ""}`}
+          onClick={() => setDashView(DASH.todo)}
+        >
+          제작 리스트
+        </button>
+      </div>
+
+      {/* 1) 재고 현황 */}
+      {dashView === DASH.inventory && (
+        <section className="panel">
+          <h3 className="sectionTitle">입점처별 재고 현황</h3>
+          <p className="sectionDesc">엑셀 시트처럼 입점처 탭을 눌러 재고를 확인/수정할 수 있어.</p>
+
+          {stores.length === 0 ? (
+            <p className="emptyState">입점처가 없어. 마스터에서 입점처를 추가해줘.</p>
+          ) : products.length === 0 ? (
+            <p className="emptyState">활성 제품이 없어. 마스터에서 제품을 추가/활성해줘.</p>
+          ) : (
+            <>
+              <StoreTabs
+                stores={stores}
+                selectedStoreId={selectedStoreId}
+                onSelect={setSelectedStoreId}
+                showAllTab={false}
+              />
+
+              {!selectedStoreId || selectedStoreId === ALL_TAB_ID ? (
+                <p className="emptyState" style={{ marginTop: 12 }}>
+                  위 탭에서 입점처를 선택해줘.
+                </p>
+              ) : (
+                <div className="tableWrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 140 }}>품목</th>
+                        <th>제품</th>
+                        <th className="numCol">현재 재고</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {products.map((p) => {
+                        const enabled = isEnabledInStore(selectedStoreId, p.id);
+                        const onHand = getOnHandQty(selectedStoreId, p.id);
+
+                        return (
+                          <tr key={p.id} className={!enabled ? "rowDisabled" : undefined}>
+                            <td>{p.category ?? "-"}</td>
+                            <td>{p.name}</td>
+                            <td className="numCol">
+                              <input
+                                type="number"
+                                min={0}
+                                value={onHand}
+                                disabled={!enabled}
+                                onChange={async (e) => {
+                                  if (!enabled) return;
+
+                                  const qtyRaw = Number(e.target.value);
+                                  const nextQty = Number.isFinite(qtyRaw) ? Math.max(0, qtyRaw) : 0;
+
+                                  // 1) UI 즉시 반영
+                                  setData((prev) =>
+                                    upsertLocalInventory(prev, {
+                                      storeId: selectedStoreId,
+                                      productId: p.id,
+                                      onHandQty: nextQty,
+                                    })
+                                  );
+
+                                  // 2) DB 저장
+                                  try {
+                                    await upsertInventoryItemDB({
+                                      storeId: selectedStoreId,
+                                      productId: p.id,
+                                      onHandQty: nextQty,
+                                    });
+                                  } catch (err) {
+                                    console.error(err);
+                                    alert("DB 저장 실패. 네트워크/로그인 상태를 확인해줘.");
+                                  }
+                                }}
+                                className="qtyInput"
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
+      {/* 2) 제작 리스트 */}
+      {dashView === DASH.todo && (
+        <section className="panel">
+          <h3 className="sectionTitle">제작 리스트</h3>
+          <p className="sectionDesc">
+            <b>합계</b> 탭은 전체 입점처 부족분 합산, 입점처 탭은 해당 입점처 기준으로 보여줘. (재고 2개 이하만,
+            목표 5개까지 채우기)
+          </p>
+
+          {stores.length === 0 ? (
+            <p className="emptyState">입점처가 없어. 마스터에서 입점처를 추가해줘.</p>
+          ) : (
+            <>
+              <StoreTabs
+                stores={stores}
+                selectedStoreId={selectedStoreId}
+                onSelect={setSelectedStoreId}
+                showAllTab={true}
+              />
+
+              {selectedStoreId === ALL_TAB_ID ? (
+                allTodoRows.length === 0 ? (
+                  <p className="emptyState" style={{ marginTop: 12 }}>
+                    전체 기준 제작 필요 없음
+                  </p>
+                ) : (
+                  <div className="tableWrap">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: 140 }}>품목</th>
+                          <th>제품</th>
+                          <th className="numCol">총 만들기</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allTodoRows.map((row) => (
+                          <tr key={row.product.id}>
+                            <td>{row.product.category ?? "-"}</td>
+                            <td>{row.product.name}</td>
+                            <td className="numCol" style={{ fontWeight: 800 }}>
+                              {row.totalNeed}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              ) : !selectedStoreId ? (
+                <p className="emptyState" style={{ marginTop: 12 }}>
+                  위 탭에서 입점처를 선택해줘.
+                </p>
+              ) : storeTodoRows.length === 0 ? (
+                <p className="emptyState" style={{ marginTop: 12 }}>
+                  제작 필요 없음 (재고 2개 이하 제품이 없어)
+                </p>
+              ) : (
+                <div className="tableWrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 140 }}>품목</th>
+                        <th>제품</th>
+                        <th className="numCol">현재 재고</th>
+                        <th className="numCol">만들기</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {storeTodoRows.map((row) => (
+                        <tr key={row.product.id}>
+                          <td>{row.product.category ?? "-"}</td>
+                          <td>{row.product.name}</td>
+                          <td className="numCol">{row.onHand}</td>
+                          <td className="numCol" style={{ fontWeight: 800 }}>
+                            {row.need}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
+// -----------------------------
+// UI 컴포넌트들
+// -----------------------------
+
+
+function Card({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="summaryCard">
+      <div className="summaryCardTitle">{title}</div>
+      <div className="summaryCardValue">{value}</div>
+    </div>
+  );
+}
+
+function StoreTabs({
+  stores,
+  selectedStoreId,
+  onSelect,
+  showAllTab,
+}: {
+  stores: Array<{ id: string; name: string }>;
+  selectedStoreId: string;
+  onSelect: (id: string) => void;
+  showAllTab: boolean;
+}) {
+  return (
+    <div className="sheetTabsWrap">
+      <div className="sheetTabs">
+        {showAllTab && (
+          <button
+            type="button"
+            onClick={() => onSelect(ALL_TAB_ID)}
+            className={`sheetTab ${selectedStoreId === ALL_TAB_ID ? "sheetTabActive" : ""}`}
+          >
+            합계
+          </button>
+        )}
+
+        {stores.map((s) => {
+          const active = selectedStoreId === s.id;
+          return (
+            <button
+              key={s.id}
+              onClick={() => onSelect(s.id)}
+              className={`sheetTab ${active ? "sheetTabActive" : ""}`}
+              type="button"
+            >
+              {s.name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+  
