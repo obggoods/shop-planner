@@ -39,51 +39,65 @@ async function requireUserId(): Promise<string> {
 
 // DB -> AppData 로드
 export async function loadDataFromDB(): Promise<AppData> {
-  await requireUserId();
-
-  const [productsRes, storesRes, invRes, spsRes] = await Promise.all([
-    supabase.from("products").select("id,name,category,active,created_at").order("created_at"),
-    supabase.from("stores").select("id,name,created_at").order("created_at"),
-    supabase.from("inventory").select("store_id,product_id,on_hand_qty,updated_at"),
-    supabase.from("store_product_states").select("store_id,product_id,enabled"),
-  ]);
-
-  const err = productsRes.error || storesRes.error || invRes.error || spsRes.error;
-  if (err) throw err;
-
-  const products = (productsRes.data ?? []) as DBProduct[];
-  const stores = (storesRes.data ?? []) as DBStore[];
-  const inventory = (invRes.data ?? []) as DBInventory[];
-  const sps = (spsRes.data ?? []) as DBSPS[];
-
-  return {
-    ...createEmptyData(),
-    products: products.map((p) => ({
-      id: p.id,
-      name: p.name,
-      category: p.category ?? "",
-      active: p.active ?? true,
-      createdAt: new Date(p.created_at).getTime(),
-    })),
-    stores: stores.map((s) => ({
-      id: s.id,
-      name: s.name,
-      createdAt: new Date(s.created_at).getTime(),
-    })),
-    inventory: inventory.map((i) => ({
-      storeId: i.store_id,
-      productId: i.product_id,
-      onHandQty: i.on_hand_qty ?? 0,
-      updatedAt: new Date(i.updated_at).getTime(),
-    })),
-    storeProductStates: sps.map((x) => ({
-      storeId: x.store_id,
-      productId: x.product_id,
-      enabled: x.enabled ?? true,
-    })),
-    updatedAt: Date.now(),
-  };
-}
+    const userId = await requireUserId();
+  
+    const [productsRes, storesRes, invRes, spsRes] = await Promise.all([
+      supabase
+        .from("products")
+        .select("id,name,category,active,created_at")
+        .eq("user_id", userId)
+        .order("created_at"),
+      supabase
+        .from("stores")
+        .select("id,name,created_at")
+        .eq("user_id", userId)
+        .order("created_at"),
+      supabase
+        .from("inventory")
+        .select("store_id,product_id,on_hand_qty,updated_at")
+        .eq("user_id", userId),
+      supabase
+        .from("store_product_states")
+        .select("store_id,product_id,enabled")
+        .eq("user_id", userId),
+    ]);
+  
+    const err = productsRes.error || storesRes.error || invRes.error || spsRes.error;
+    if (err) throw err;
+  
+    const products = (productsRes.data ?? []) as DBProduct[];
+    const stores = (storesRes.data ?? []) as DBStore[];
+    const inventory = (invRes.data ?? []) as DBInventory[];
+    const sps = (spsRes.data ?? []) as DBSPS[];
+  
+    return {
+      ...createEmptyData(),
+      products: products.map((p) => ({
+        id: p.id,
+        name: p.name,
+        category: p.category ?? "",
+        active: p.active ?? true,
+        createdAt: new Date(p.created_at).getTime(),
+      })),
+      stores: stores.map((s) => ({
+        id: s.id,
+        name: s.name,
+        createdAt: new Date(s.created_at).getTime(),
+      })),
+      inventory: inventory.map((i) => ({
+        storeId: i.store_id,
+        productId: i.product_id,
+        onHandQty: i.on_hand_qty ?? 0,
+        updatedAt: new Date(i.updated_at).getTime(),
+      })),
+      storeProductStates: sps.map((x) => ({
+        storeId: x.store_id,
+        productId: x.product_id,
+        enabled: x.enabled ?? true,
+      })),
+      updatedAt: Date.now(),
+    };
+  }  
 
 // DB가 비어있는지 체크 (초기 마이그레이션 판단용)
 export async function isDBEmpty(): Promise<boolean> {
