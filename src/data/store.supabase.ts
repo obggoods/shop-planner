@@ -110,7 +110,6 @@ export async function loadDataFromDB(): Promise<AppData> {
   const products = (productsRes.data ?? []) as DBProduct[];
   const stores = (storesRes.data ?? []) as DBStore[];
   const inventory = (invRes.data ?? []) as DBInventory[];
-  const sps = (spsRes.data ?? []) as DBSPS[];
 
   // ✅ 추가: 혹시 DB에 store_product_states가 비어 있거나 조합이 누락된 경우 자동 seed
   await ensureStoreProductStatesSeedDB({
