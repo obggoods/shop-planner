@@ -1,8 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+// src/pages/Master.tsx
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppData, Product, Store, StoreProductState } from "../data/models";
 import { downloadJson, generateId, readJsonFile } from "../data/store";
-import { loadDataFromDB } from "../data/store.supabase";
-import { setStoreProductEnabledDB } from "../data/store.supabase";
+import {
+  loadDataFromDB,
+  ensureStoreProductStatesSeedDB,
+  setStoreProductEnabledDB,
+  createProductDB,
+  createStoreDB,
+  deleteProductDB,
+  deleteStoreDB,
+} from "../data/store.supabase";
 
 const CATEGORIES = ["스크런치", "버튼키링", "거울키링", "케이블홀더", "립밤케이스", "쿠션코스터", "거울인형"] as const;
 type Category = (typeof CATEGORIES)[number];
@@ -24,7 +32,6 @@ const EMPTY: AppData = {
 
 export default function Master() {
   const [data, setData] = useState<AppData>(EMPTY);
-
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -32,16 +39,22 @@ export default function Master() {
   const [newStoreName, setNewStoreName] = useState("");
   const [newCategory, setNewCategory] = useState<Category>("스크런치");
 
-  const productCsvRef = useRef<HTMLInputElement | null>(null);
-  const [csvMsg, setCsvMsg] = useState<string>("");
   const [manageStoreId, setManageStoreId] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // ✅ Master도 DB에서 로드
-  const refresh = async () => {
-    const db = await loadDataFromDB();
-    setData(db);
-  };
+  const refresh = useCallback(async () => {
+    const dbData = await loadDataFromDB();
+
+    // ✅ store×product 조합이 없으면 기본값 true 때문에 UI/DB가 어긋남
+    await ensureStoreProductStatesSeedDB({
+      storeIds: dbData.stores.map((s) => s.id),
+      productIds: dbData.products.map((p) => p.id),
+    });
+
+    // seed 반영 후 다시 로드(중요)
+    const dbData2 = await loadDataFromDB();
+    setData(dbData2);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -49,9 +62,7 @@ export default function Master() {
       try {
         setLoading(true);
         setErrorMsg(null);
-        const db = await loadDataFromDB();
-        if (!alive) return;
-        setData(db);
+        await refresh();
       } catch (e: any) {
         if (!alive) return;
         console.error("[MASTER] load error", e);
@@ -63,79 +74,78 @@ export default function Master() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [refresh]);
 
   const products = useMemo(() => sortByCreatedAtDesc(data.products), [data.products]);
   const stores = useMemo(() => sortByCreatedAtDesc(data.stores), [data.stores]);
 
-  const isEnabledInStore = (storeId: string, productId: string) => {
-    const hit = (data.storeProductStates ?? []).find(
-      (x) => x.storeId === storeId && x.productId === productId
-    );
-    return hit ? hit.enabled : true; // 기본값 true
-  };
+  const isEnabledInStore = useCallback(
+    (storeId: string, productId: string) => {
+      const hit = data.storeProductStates.find((x) => x.storeId === storeId && x.productId === productId);
+      return hit ? hit.enabled : true; // 기본값 true (seed가 잘 되면 hit가 생김)
+    },
+    [data.storeProductStates]
+  );
 
-  // ✅ 개별 토글 (UI 즉시 반영 + DB 반영)
-  const toggleOne = async (storeId: string, productId: string, nextEnabled: boolean) => {
-    // 1) UI 즉시 반영
-    setData((prev) => ({
-      ...prev,
-      storeProductStates: [
-        ...(prev.storeProductStates ?? []).filter(
-          (x) => !(x.storeId === storeId && x.productId === productId)
-        ),
-        { storeId, productId, enabled: nextEnabled },
-      ],
-      updatedAt: Date.now(),
-    }));
+  // ✅ 단일 ON/OFF (UI 즉시 반영 + DB upsert)
+  const toggleOne = useCallback(
+    async (storeId: string, productId: string, nextEnabled: boolean) => {
+      // 1) UI 즉시 반영
+      setData((prev) => ({
+        ...prev,
+        storeProductStates: [
+          ...prev.storeProductStates.filter((x) => !(x.storeId === storeId && x.productId === productId)),
+          { storeId, productId, enabled: nextEnabled },
+        ],
+        updatedAt: Date.now(),
+      }));
 
-    // 2) DB 반영
-    try {
-      await setStoreProductEnabledDB({ storeId, productId, enabled: nextEnabled });
-      // (선택) DB 기준으로 다시 동기화하고 싶으면 아래 주석 해제
-      // await refresh();
-    } catch (e: any) {
-      console.error("[MASTER] toggleOne failed", e);
-      alert("저장 실패: 콘솔(Network)에서 401/403 확인해줘 (로그인/RLS 문제일 가능성 큼)");
-    }
-  };
-
-  // ✅ 전체 ON/OFF (UI 즉시 반영 + DB 반영)
-  const toggleAll = async (storeId: string, nextEnabled: boolean) => {
-    const activeProductIds = (data.products ?? []).filter((p) => p.active).map((p) => p.id);
-
-    // 1) UI 즉시 반영
-    setData((prev) => {
-      const list = prev.storeProductStates ?? [];
-      const map = new Map<string, StoreProductState>();
-      for (const x of list) map.set(`${x.storeId}|||${x.productId}`, x);
-
-      for (const productId of activeProductIds) {
-        map.set(`${storeId}|||${productId}`, { storeId, productId, enabled: nextEnabled });
+      // 2) DB 반영
+      try {
+        await setStoreProductEnabledDB({ storeId, productId, enabled: nextEnabled });
+      } catch (e) {
+        console.error(e);
+        alert("저장 실패 (로그인 / 권한 / RLS 확인)");
+        // 실패했으면 DB 기준으로 다시 맞추기
+        await refresh();
       }
+    },
+    [refresh]
+  );
 
-      return { ...prev, storeProductStates: Array.from(map.values()), updatedAt: Date.now() };
-    });
+  // ✅ 전체 ON/OFF (UI 즉시 반영 + DB 병렬 upsert)
+  const toggleAll = useCallback(
+    async (storeId: string, nextEnabled: boolean) => {
+      const activeProductIds = data.products.filter((p) => p.active).map((p) => p.id);
 
-    // 2) DB 반영 (병렬)
-    try {
-      await Promise.all(
-        activeProductIds.map((productId) =>
-          setStoreProductEnabledDB({ storeId, productId, enabled: nextEnabled })
-        )
-      );
-      // (선택) await refresh();
-    } catch (e: any) {
-      console.error("[MASTER] toggleAll failed", e);
-      alert("전체 ON/OFF 저장 실패: 콘솔(Network)에서 401/403 확인해줘 (로그인/RLS 문제일 가능성 큼)");
-    }
-  };
+      // 1) UI 즉시 반영
+      setData((prev) => {
+        const list = prev.storeProductStates ?? [];
+        const map = new Map<string, StoreProductState>();
+        for (const x of list) map.set(`${x.storeId}|||${x.productId}`, x);
 
-  // ---- 아래 addProduct/addStore는 네 프로젝트에서 DB upsert 함수가 따로 있어야 완전하게 DB와 동기화됨 ----
-  // 지금 이 파일은 "취급 ON/OFF" 문제 해결에 초점을 맞춘 버전이야.
-  // 제품/입점처 추가도 DB로 저장하려면 products/stores upsert 함수도 붙여야 함.
+        for (const productId of activeProductIds) {
+          const key = `${storeId}|||${productId}`;
+          map.set(key, { storeId, productId, enabled: nextEnabled });
+        }
 
-  function addProduct() {
+        return { ...prev, storeProductStates: Array.from(map.values()), updatedAt: Date.now() };
+      });
+
+      // 2) DB 반영
+      try {
+        await Promise.all(activeProductIds.map((productId) => setStoreProductEnabledDB({ storeId, productId, enabled: nextEnabled })));
+      } catch (e) {
+        console.error(e);
+        alert("전체 ON/OFF 저장 실패 (로그인 / 권한 / RLS 확인)");
+        await refresh();
+      }
+    },
+    [data.products, refresh]
+  );
+
+  // ✅ 제품 추가 (DB 저장 후 refresh)
+  const addProduct = useCallback(async () => {
     const name = newProductName.trim();
     if (!name) return;
 
@@ -147,11 +157,51 @@ export default function Master() {
       createdAt: Date.now(),
     };
 
-    setData((prev) => ({ ...prev, products: [p, ...prev.products], updatedAt: Date.now() }));
-    setNewProductName("");
-  }
+    try {
+      await createProductDB(p);
+      setNewProductName("");
+      await refresh();
+    } catch (e) {
+      console.error(e);
+      alert("제품 추가 실패 (로그인 / 권한 / RLS 확인)");
+    }
+  }, [newProductName, newCategory, refresh]);
 
-  function addStore() {
+  // ✅ 제품 활성/비활성 (DB 저장 후 refresh)
+  const toggleProductActive = useCallback(
+    async (productId: string) => {
+      const hit = data.products.find((p) => p.id === productId);
+      if (!hit) return;
+
+      const next = { ...hit, active: !hit.active };
+
+      try {
+        await createProductDB(next); // upsert로 동작하게 만들어두면 편함
+        await refresh();
+      } catch (e) {
+        console.error(e);
+        alert("제품 활성/비활성 변경 실패 (로그인 / 권한 / RLS 확인)");
+      }
+    },
+    [data.products, refresh]
+  );
+
+  const deleteProduct = useCallback(
+    async (productId: string) => {
+      if (!confirm("이 제품을 삭제할까요?")) return;
+      try {
+        await deleteProductDB(productId);
+        await refresh();
+      } catch (e) {
+        console.error(e);
+        alert("제품 삭제 실패 (로그인 / 권한 / RLS 확인)");
+      }
+    },
+    [refresh]
+  );
+
+  // ✅ 입점처 추가 (DB 저장 후 refresh)
+  const addStore = useCallback(async () => {
     const name = newStoreName.trim();
     if (!name) return;
 
@@ -161,15 +211,44 @@ export default function Master() {
       createdAt: Date.now(),
     };
 
-    setData((prev) => ({ ...prev, stores: [s, ...prev.stores], updatedAt: Date.now() }));
-    setNewStoreName("");
-  }
+    try {
+      await createStoreDB(s);
+      setNewStoreName("");
+      await refresh();
+    } catch (e) {
+      console.error(e);
+      alert("입점처 추가 실패 (로그인 / 권한 / RLS 확인)");
+    }
+  }, [newStoreName, refresh]);
 
-  function handleBackup() {
-    const filename = `shop-planner-backup_${new Date().toISOString().slice(0, 10)}.json`;
-    downloadJson(filename, data);
-  }
+  const deleteStore = useCallback(
+    async (storeId: string) => {
+      if (!confirm("이 입점처를 삭제할까요? (관련 재고/정산/계획도 함께 삭제됩니다)")) return;
+      try {
+        await deleteStoreDB(storeId);
+        if (manageStoreId === storeId) setManageStoreId("");
+        await refresh();
+      } catch (e) {
+        console.error(e);
+        alert("입점처 삭제 실패 (로그인 / 권한 / RLS 확인)");
+      }
+    },
+    [manageStoreId, refresh]
+  );
 
+  // ✅ 백업(JSON 다운로드) - DB 데이터 기준으로 export
+  const handleBackup = useCallback(async () => {
+    try {
+      await refresh(); // 최신 DB로 동기화하고
+      const filename = `shop-planner-backup_${new Date().toISOString().slice(0, 10)}.json`;
+      downloadJson(filename, data);
+    } catch (e) {
+      console.error(e);
+      alert("백업 실패");
+    }
+  }, [data, refresh]);
+
+  // ✅ 복구(JSON 업로드) - (원하면 나중에 “DB로 업로드”도 붙일 수 있음)
   async function handleRestore(file: File) {
     try {
       const parsed = (await readJsonFile(file)) as Partial<AppData>;
@@ -177,6 +256,7 @@ export default function Master() {
         alert("백업 파일 형식이 올바르지 않습니다 (schemaVersion 불일치).");
         return;
       }
+      // 여기서는 우선 화면에만 반영(=미리보기/검증용). DB 업로드까지 하고 싶으면 말해줘.
       const next: AppData = {
         schemaVersion: 1,
         products: parsed.products ?? [],
@@ -188,7 +268,7 @@ export default function Master() {
         updatedAt: Date.now(),
       };
       setData(next);
-      alert("복구 완료! (※ DB로 반영하려면 별도 업로드/마이그레이션 로직 필요)");
+      alert("복구(로컬 반영) 완료! DB로 업로드까지 원하면 기능 추가해줄게.");
     } catch {
       alert("복구 실패: JSON 파일을 읽을 수 없습니다.");
     } finally {
@@ -196,21 +276,8 @@ export default function Master() {
     }
   }
 
-  // --- UI ---
-  if (loading) {
-    return <div style={{ padding: 16 }}>마스터 로딩 중…</div>;
-  }
-  if (errorMsg) {
-    return (
-      <div style={{ padding: 16 }}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>마스터 로드 실패</div>
-        <div style={{ padding: 12, background: "#f3f4f6", borderRadius: 8 }}>{errorMsg}</div>
-        <button style={{ marginTop: 12 }} onClick={() => location.reload()}>
-          새로고침
-        </button>
-      </div>
-    );
-  }
+  if (loading) return <div style={{ padding: 16 }}>로딩 중…</div>;
+  if (errorMsg) return <div style={{ padding: 16, color: "crimson" }}>에러: {errorMsg}</div>;
 
   return (
     <div>
@@ -221,11 +288,7 @@ export default function Master() {
           <h3 style={{ marginTop: 0 }}>제품 추가</h3>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <select
-              value={newCategory}
-              onChange={(e) => setNewCategory(e.target.value as Category)}
-              style={{ padding: 8, minWidth: 140 }}
-            >
+            <select value={newCategory} onChange={(e) => setNewCategory(e.target.value as Category)} style={{ padding: 8, minWidth: 140 }}>
               {CATEGORIES.map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -248,9 +311,7 @@ export default function Master() {
             </button>
           </div>
 
-          <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
-            * (주의) 지금 파일은 제품/입점처 추가를 DB에 저장하진 않음. ON/OFF 동기화 문제부터 잡는 버전.
-          </p>
+          <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>* 제품은 DB에 저장돼. (옵션/색상은 2차에서 확장)</p>
         </div>
 
         <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12, minWidth: 280, flex: 1 }}>
@@ -295,13 +356,15 @@ export default function Master() {
               }}
             />
           </div>
+
+          <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>* 백업은 “현재 DB 데이터 기준”으로 export 하는 용도.</p>
         </div>
       </section>
 
       <section style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12, marginBottom: 16 }}>
         <h3 style={{ marginTop: 0 }}>입점처별 취급 제품 설정</h3>
         <p style={{ marginTop: 0, color: "#666", fontSize: 13 }}>
-          OFF면 대시보드에서 숨김 + 제작 계산 제외
+          입점처마다 입고하는 제품이 다르면 여기서 ON/OFF로 관리해. (OFF면 대시보드에서 숨김 + 제작 계산 제외)
         </p>
 
         {stores.length === 0 ? (
@@ -310,11 +373,7 @@ export default function Master() {
           <p style={{ color: "#666" }}>제품이 없어. 먼저 제품을 추가해줘.</p>
         ) : (
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <select
-              value={manageStoreId}
-              onChange={(e) => setManageStoreId(e.target.value)}
-              style={{ padding: 8, minWidth: 220 }}
-            >
+            <select value={manageStoreId} onChange={(e) => setManageStoreId(e.target.value)} style={{ padding: 8, minWidth: 220 }}>
               <option value="">(입점처 선택)</option>
               {stores.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -322,6 +381,14 @@ export default function Master() {
                 </option>
               ))}
             </select>
+
+            {!manageStoreId ? (
+              <span style={{ color: "#666", fontSize: 13 }}>입점처를 선택하면 제품 ON/OFF 목록이 보여.</span>
+            ) : (
+              <span style={{ color: "#111827", fontSize: 13, fontWeight: 700 }}>
+                선택됨: {stores.find((s) => s.id === manageStoreId)?.name}
+              </span>
+            )}
           </div>
         )}
 
@@ -331,6 +398,7 @@ export default function Master() {
               <button type="button" onClick={() => toggleAll(manageStoreId, true)} style={{ padding: "6px 10px" }}>
                 전체 ON
               </button>
+
               <button type="button" onClick={() => toggleAll(manageStoreId, false)} style={{ padding: "6px 10px" }}>
                 전체 OFF
               </button>
@@ -383,6 +451,76 @@ export default function Master() {
             </div>
           </div>
         )}
+      </section>
+
+      <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
+          <h3 style={{ marginTop: 0 }}>제품 목록</h3>
+          {products.length === 0 ? (
+            <p style={{ color: "#666" }}>아직 제품이 없어요. 위에서 추가해봐.</p>
+          ) : (
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {products.map((p) => (
+                <li
+                  key={p.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    padding: "8px 0",
+                    borderBottom: "1px solid #eee",
+                    opacity: p.active ? 1 : 0.5,
+                  }}
+                >
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    <strong>
+                      [{p.category}] {p.name}
+                    </strong>
+                    <span style={{ fontSize: 12, color: "#666" }}>{p.active ? "활성" : "비활성"}</span>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => toggleProductActive(p.id)} style={{ padding: "6px 10px" }}>
+                      {p.active ? "비활성" : "활성"}
+                    </button>
+                    <button onClick={() => deleteProduct(p.id)} style={{ padding: "6px 10px" }}>
+                      삭제
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
+          <h3 style={{ marginTop: 0 }}>입점처 목록</h3>
+          {stores.length === 0 ? (
+            <p style={{ color: "#666" }}>아직 입점처가 없어요. 위에서 추가해봐.</p>
+          ) : (
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {stores.map((s) => (
+                <li
+                  key={s.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    padding: "8px 0",
+                    borderBottom: "1px solid #eee",
+                  }}
+                >
+                  <strong>{s.name}</strong>
+                  <button onClick={() => deleteStore(s.id)} style={{ padding: "6px 10px" }}>
+                    삭제
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </section>
     </div>
   );
