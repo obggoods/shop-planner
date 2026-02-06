@@ -24,12 +24,6 @@ type DBInventory = {
   updated_at: string;
 };
 
-type DBSPS = {
-  store_id: string;
-  product_id: string;
-  enabled: boolean | null;
-};
-
 async function requireUserId(): Promise<string> {
   const { data, error } = await supabase.auth.getUser();
   if (error) throw error;
@@ -377,3 +371,31 @@ export async function createProductDB(p: Product): Promise<void> {
   
     if (error) throw error;
   }
+// ✅ 특정 입점처의 여러 제품 enabled를 "한 번의 요청"으로 저장 (Bulk Upsert)
+export async function setStoreProductsEnabledBulkDB(input: {
+    storeId: string;
+    productIds: string[];
+    enabled: boolean;
+  }): Promise<void> {
+    const userId = await requireUserId();
+  
+    if (input.productIds.length === 0) return;
+  
+    const now = new Date().toISOString();
+  
+    const rows = input.productIds.map((productId) => ({
+      user_id: userId,
+      store_id: input.storeId,
+      product_id: productId,
+      enabled: input.enabled,
+      updated_at: now,
+    }));
+  
+    // ✅ 배열 upsert = 네트워크 요청 1번
+    const { error } = await supabase
+      .from("store_product_states")
+      .upsert(rows, { onConflict: "user_id,store_id,product_id" });
+  
+    if (error) throw error;
+  }
+  

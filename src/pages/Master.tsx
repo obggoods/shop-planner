@@ -6,6 +6,7 @@ import {
   loadDataFromDB,
   ensureStoreProductStatesSeedDB,
   setStoreProductEnabledDB,
+  setStoreProductsEnabledBulkDB,
   createProductDB,
   createStoreDB,
   deleteProductDB,
@@ -116,33 +117,38 @@ export default function Master() {
   // ✅ 전체 ON/OFF (UI 즉시 반영 + DB 병렬 upsert)
   const toggleAll = useCallback(
     async (storeId: string, nextEnabled: boolean) => {
+      // 전역 비활성 제품 제외 (UI와 맞추기)
       const activeProductIds = data.products.filter((p) => p.active).map((p) => p.id);
-
+  
       // 1) UI 즉시 반영
       setData((prev) => {
         const list = prev.storeProductStates ?? [];
         const map = new Map<string, StoreProductState>();
         for (const x of list) map.set(`${x.storeId}|||${x.productId}`, x);
-
+  
         for (const productId of activeProductIds) {
           const key = `${storeId}|||${productId}`;
           map.set(key, { storeId, productId, enabled: nextEnabled });
         }
-
+  
         return { ...prev, storeProductStates: Array.from(map.values()), updatedAt: Date.now() };
       });
-
+  
       // 2) DB 반영
       try {
-        await Promise.all(activeProductIds.map((productId) => setStoreProductEnabledDB({ storeId, productId, enabled: nextEnabled })));
-      } catch (e) {
-        console.error(e);
-        alert("전체 ON/OFF 저장 실패 (로그인 / 권한 / RLS 확인)");
-        await refresh();
+        await setStoreProductsEnabledBulkDB({
+          storeId,
+          productIds: activeProductIds,
+          enabled: nextEnabled,
+        });
+      } catch (e: any) {
+        console.error("toggleAll error:", e);
+        alert(`전체 ON/OFF 저장 실패: ${e?.message ?? e}`);
       }
     },
     [data.products, refresh]
   );
+
 
   // ✅ 제품 추가 (DB 저장 후 refresh)
   const addProduct = useCallback(async () => {
