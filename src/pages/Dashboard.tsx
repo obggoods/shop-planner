@@ -9,6 +9,7 @@ import {
   isDBEmpty,
   migrateLocalToDBOnce,
   upsertInventoryItemDB,
+  ensureStoreProductStatesSeedDB,
 } from "../data/store.supabase";
 
 type DashView = "inventory" | "todo";
@@ -42,54 +43,52 @@ export default function Dashboard() {
   // 1) DB에서 최신 데이터 로드 함수
   // -----------------------------
   const refreshFromDB = useCallback(async () => {
+    // 1) DB 데이터 로드
     const dbData = await loadDataFromDB();
-    setData(dbData);
-
-    // 선택 입점처 기본값(아무것도 없으면 첫 매장)
-    if (dbData.stores.length > 0) {
-      setSelectedStoreId((prev) => prev || dbData.stores[0].id);
+  
+    // 2) store × product 조합 seed (없으면 생성)
+    await ensureStoreProductStatesSeedDB({
+      storeIds: dbData.stores.map((s) => s.id),
+      productIds: dbData.products.map((p) => p.id),
+    });
+  
+    // 3) seed 반영된 데이터 다시 로드
+    const dbData2 = await loadDataFromDB();
+    setData(dbData2);
+  
+    // 4) 선택 입점처 기본값 설정
+    if (dbData2.stores.length > 0) {
+      setSelectedStoreId((prev) => prev || dbData2.stores[0].id);
     }
-    
   }, []);
-
+  
   // -----------------------------
   // 2) 최초 진입 시: DB 비었으면 마이그레이션 + 로드
   // -----------------------------
   useEffect(() => {
     let alive = true;
-
+  
     (async () => {
       console.log("[DB] start");
       try {
         setLoading(true);
         setErrorMsg(null);
-
+  
         console.log("[DB] check empty...");
         const empty = await isDBEmpty();
         console.log("[DB] empty =", empty);
-
+  
         if (empty) {
           console.log("[DB] migrate start...");
           await migrateLocalToDBOnce();
           console.log("[DB] migrate done");
         }
-
-        console.log("[DB] loadDataFromDB start...");
-        const dbData = await loadDataFromDB();
-        console.log("[DB] loadDataFromDB done", {
-          products: dbData.products.length,
-          stores: dbData.stores.length,
-          inv: dbData.inventory.length,
-          sps: dbData.storeProductStates.length,
-        });
-
+  
+        console.log("[DB] refreshFromDB start...");
+        await refreshFromDB();
+        console.log("[DB] refreshFromDB done");
+  
         if (!alive) return;
-
-        setData(dbData);
-
-        if (dbData.stores.length > 0) {
-          setSelectedStoreId((prev) => prev || dbData.stores[0].id);
-        }
       } catch (e: any) {
         console.error("[DB] error", e);
         if (!alive) return;
@@ -98,11 +97,12 @@ export default function Dashboard() {
         if (alive) setLoading(false);
       }
     })();
-
+  
     return () => {
       alive = false;
     };
-  }, []);
+  }, [refreshFromDB]);
+  
 
   // -----------------------------
   // 3) ✅ Realtime 구독(4개 테이블) → 변경 시 refreshFromDB()
@@ -149,14 +149,24 @@ export default function Dashboard() {
     [data.stores]
   );
 
-  // ✅ 입점처별 제품 활성화 여부
-  const isEnabledInStore = useCallback(
+// ✅ 입점처별 제품 활성화 여부
+const isEnabledInStore = useCallback(
     (storeId: string, productId: string) => {
-      const hit = data.storeProductStates?.find((x) => x.storeId === storeId && x.productId === productId);
+      const hit = data.storeProductStates?.find(
+        (x) => x.storeId === storeId && x.productId === productId
+      );
+  
+      console.log("[SPS]", {
+        storeId,
+        productId,
+        hit,
+        total: data.storeProductStates?.length,
+      });
+  
       return hit?.enabled ?? true; // 기본값: 설정 없으면 활성
     },
     [data.storeProductStates]
-  );
+  );  
 
   const products = useMemo(() => {
     return [...data.products]

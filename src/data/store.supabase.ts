@@ -37,6 +37,60 @@ async function requireUserId(): Promise<string> {
   return data.user.id;
 }
 
+export async function ensureStoreProductStatesSeedDB(input: {
+    storeIds: string[];
+    productIds: string[];
+  }): Promise<void> {
+    const userId = await requireUserId();
+  
+    if (input.storeIds.length === 0 || input.productIds.length === 0) return;
+  
+    // 1) 현재 존재하는 조합 조회
+    const { data: existing, error: selErr } = await supabase
+      .from("store_product_states")
+      .select("store_id,product_id")
+      .eq("user_id", userId);
+  
+    if (selErr) throw selErr;
+  
+    const exists = new Set<string>(
+      (existing ?? []).map((r: any) => `${r.store_id}__${r.product_id}`)
+    );
+  
+    // 2) 없는 조합만 만들기
+    const toInsert: Array<{
+      user_id: string;
+      store_id: string;
+      product_id: string;
+      enabled: boolean;
+      updated_at: string;
+    }> = [];
+  
+    const now = new Date().toISOString();
+  
+    for (const storeId of input.storeIds) {
+      for (const productId of input.productIds) {
+        const key = `${storeId}__${productId}`;
+        if (exists.has(key)) continue;
+  
+        toInsert.push({
+          user_id: userId,
+          store_id: storeId,
+          product_id: productId,
+          enabled: true,
+          updated_at: now,
+        });
+      }
+    }
+  
+    if (toInsert.length === 0) return;
+  
+    // 3) insert
+    const { error: insErr } = await supabase.from("store_product_states").insert(toInsert);
+    if (insErr) throw insErr;
+  }
+  
+
 // DB -> AppData 로드
 export async function loadDataFromDB(): Promise<AppData> {
     const userId = await requireUserId();
