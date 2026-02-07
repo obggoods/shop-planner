@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import type { AppData } from "../data/models";
-import { loadData as loadLocalData, upsertInventoryItem as upsertLocalInventory } from "../data/store";
+import { loadData as loadLocalData } from "../data/store";
 import { supabase } from "../lib/supabaseClient";
 
 import {
@@ -224,11 +224,10 @@ const isEnabledInStore = useCallback(
 
 
   // ✅ 재고 현황 탭에서: 선택 입점처 기준으로 (ON 제품 먼저, OFF 제품은 접기/펼치기)
-const { enabledProducts, disabledProducts, productsForInventory } = useMemo(() => {
+const { disabledProducts, productsForInventory } = useMemo(() => {
   // 입점처 선택 전이면 기존 정렬 그대로
   if (!selectedStoreId || selectedStoreId === ALL_TAB_ID) {
     return {
-      enabledProducts: products,
       disabledProducts: [] as typeof products,
       productsForInventory: products,
     };
@@ -242,7 +241,6 @@ const { enabledProducts, disabledProducts, productsForInventory } = useMemo(() =
   }
 
   return {
-    enabledProducts: enabled,
     disabledProducts: disabled,
     productsForInventory: showDisabledProducts ? [...enabled, ...disabled] : enabled,
   };

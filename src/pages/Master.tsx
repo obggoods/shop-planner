@@ -1,6 +1,5 @@
 // src/pages/Master.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import React from "react";
 import type { AppData, Product, Store, StoreProductState } from "../data/models";
 import { downloadJson, generateId, readJsonFile } from "../data/store";
 import {
