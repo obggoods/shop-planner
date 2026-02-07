@@ -12,6 +12,7 @@ import {
   deleteProductDB,
   deleteStoreDB,
 } from "../data/store.supabase";
+import { getOrCreateMyProfile, updateMyDefaultTargetQty, updateMyLowStockThreshold } from "../lib/supabaseClient";
 
 const CATEGORIES = ["스크런치", "버튼키링", "거울키링", "케이블홀더", "립밤케이스", "쿠션코스터", "거울인형"] as const;
 type Category = (typeof CATEGORIES)[number];
@@ -35,6 +36,39 @@ export default function Master() {
   const [data, setData] = useState<AppData>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+    // ✅ 유저별 기본 목표 재고 수량 (profiles.default_target_qty)
+    const [defaultTargetQty, setDefaultTargetQty] = useState<number>(5);
+    const [defaultTargetQtyInput, setDefaultTargetQtyInput] = useState<string>("5");
+    const [profileLoading, setProfileLoading] = useState(true);
+    const [profileSaving, setProfileSaving] = useState(false);
+    const [lowStockThreshold, setLowStockThreshold] = useState<number>(2);
+    const [lowStockThresholdInput, setLowStockThresholdInput] = useState<string>("2");  
+  
+    useEffect(() => {
+      let alive = true;
+  
+      (async () => {
+        try {
+          setProfileLoading(true);
+          const profile = await getOrCreateMyProfile();
+          if (!alive) return;
+  
+          setDefaultTargetQty(profile.default_target_qty);
+          setDefaultTargetQtyInput(String(profile.default_target_qty));
+          setLowStockThreshold(profile.low_stock_threshold ?? 2);
+          setLowStockThresholdInput(String(profile.low_stock_threshold ?? 2));
+        } catch (e) {
+          console.error("[profiles] failed to load profile", e);
+        } finally {
+          if (alive) setProfileLoading(false);
+        }
+      })();
+  
+      return () => {
+        alive = false;
+      };
+    }, []);  
 
   const [newProductName, setNewProductName] = useState("");
   const [newStoreName, setNewStoreName] = useState("");
@@ -338,6 +372,101 @@ const toggleProductMakeEnabled = useCallback(
     <div className="pageWrap">
     <div className="pageContainer">
       <h2 style={{ marginTop: 0 }}>마스터 관리</h2>
+
+      {/* ✅ 유저별 설정: 목표 재고 / 최소 재고 기준 */}
+<div
+  style={{
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    padding: 12,
+    border: "1px solid rgba(0,0,0,0.08)",
+    borderRadius: 12,
+    marginBottom: 16,
+    background: "#fff",
+    flexWrap: "wrap",
+  }}
+>
+  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <div style={{ fontWeight: 700 }}>기본 목표 재고 수량</div>
+    <input
+      type="number"
+      min={0}
+      step={1}
+      value={defaultTargetQtyInput}
+      onChange={(e) => setDefaultTargetQtyInput(e.target.value)}
+      onBlur={async () => {
+        const val =
+          defaultTargetQtyInput.trim() === ""
+            ? 0
+            : Math.max(0, parseInt(defaultTargetQtyInput, 10) || 0);
+
+        setDefaultTargetQty(val);
+        setDefaultTargetQtyInput(String(val));
+
+        try {
+          setProfileSaving(true);
+          await updateMyDefaultTargetQty(val);
+        } catch (e) {
+          console.error("[profiles] failed to save default_target_qty", e);
+        } finally {
+          setProfileSaving(false);
+        }
+      }}
+      disabled={profileLoading || profileSaving}
+      style={{
+        width: 90,
+        padding: "6px 10px",
+        border: "1px solid rgba(0,0,0,0.18)",
+        borderRadius: 10,
+      }}
+    />
+  </div>
+
+  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <div style={{ fontWeight: 700 }}>최소 재고 수량(≤)</div>
+    <input
+      type="number"
+      min={0}
+      step={1}
+      value={lowStockThresholdInput}
+      onChange={(e) => setLowStockThresholdInput(e.target.value)}
+      onBlur={async () => {
+        const val =
+          lowStockThresholdInput.trim() === ""
+            ? 0
+            : Math.max(0, parseInt(lowStockThresholdInput, 10) || 0);
+
+        setLowStockThreshold(val);
+        setLowStockThresholdInput(String(val));
+
+        try {
+          setProfileSaving(true);
+          await updateMyLowStockThreshold(val);
+        } catch (e) {
+          console.error("[profiles] failed to save low_stock_threshold", e);
+        } finally {
+          setProfileSaving(false);
+        }
+      }}
+      disabled={profileLoading || profileSaving}
+      style={{
+        width: 70,
+        padding: "6px 10px",
+        border: "1px solid rgba(0,0,0,0.18)",
+        borderRadius: 10,
+      }}
+    />
+  </div>
+
+  <div style={{ fontSize: 12, color: "#666" }}>
+    {profileLoading
+      ? "불러오는 중…"
+      : profileSaving
+        ? "저장 중…"
+        : "제작 리스트 계산 기준으로 사용돼요."}
+  </div>
+</div>
 
       <section className="masterTopGrid">
   <div className="masterCard masterProducts">

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import type { AppData } from "../data/models";
 import { loadData as loadLocalData } from "../data/store";
-import { supabase } from "../lib/supabaseClient";
+import { supabase, getOrCreateMyProfile } from "../lib/supabaseClient";
 
 import {
   loadDataFromDB,
@@ -13,8 +13,8 @@ import {
 
 type DashView = "inventory" | "todo";
 
-const LOW_STOCK_THRESHOLD = 2;
-const RESTOCK_TO = 5;
+const LOW_STOCK_THRESHOLD_DEFAULT = 2;
+const RESTOCK_TO_DEFAULT = 5;
 
 // 제작 리스트의 "합계" 탭을 위한 특수 ID
 const ALL_TAB_ID = "__ALL__";
@@ -25,12 +25,17 @@ const DASH = {
 } as const;
 
 export default function Dashboard() {
-  // ✅ 화면 상단 탭(대시보드/마스터)
 
   // ✅ 데이터(초기엔 로컬 표시)
   const [data, setData] = useState<AppData>(() => loadLocalData());
 
-  // ✅ DB 로드 상태
+    // ✅ 유저별 기본 목표 재고 수량 (profiles.default_target_qty)
+    const [restockTo, setRestockTo] = useState<number>(RESTOCK_TO_DEFAULT);
+    const [profileLoading, setProfileLoading] = useState(true); 
+  
+  const [lowStockThreshold, setLowStockThreshold] = useState<number>(LOW_STOCK_THRESHOLD_DEFAULT);
+
+    // ✅ DB 로드 상태
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -104,6 +109,29 @@ export default function Dashboard() {
     };
   }, [refreshFromDB]);
   
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        setProfileLoading(true);
+        const profile = await getOrCreateMyProfile();
+        if (!alive) return;
+        setRestockTo(profile.default_target_qty ?? RESTOCK_TO_DEFAULT);
+        setLowStockThreshold(profile.low_stock_threshold ?? LOW_STOCK_THRESHOLD_DEFAULT);
+      } catch (e) {
+        console.error("[profiles] failed to load profile in dashboard", e);
+        if (!alive) return;
+        setRestockTo(RESTOCK_TO_DEFAULT);
+      } finally {
+        if (alive) setProfileLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // -----------------------------
   // 3) ✅ Realtime 구독(4개 테이블) → 변경 시 refreshFromDB()
@@ -268,7 +296,7 @@ useEffect(() => {
       .filter((p) => p.makeEnabled !== false) // 제작 제외
       .map((p) => {
         const onHand = getOnHandQty(selectedStoreId, p.id);
-        const need = onHand <= LOW_STOCK_THRESHOLD ? Math.max(0, RESTOCK_TO - onHand) : 0;
+        const need = onHand <= lowStockThreshold ? Math.max(0, restockTo - onHand) : 0;
         return { product: p, onHand, need };
       })
       .filter((row) => row.need > 0);
@@ -286,8 +314,8 @@ const allTodoRows = useMemo(() => {
     for (const s of stores) {
       if (!isEnabledInStore(s.id, p.id)) continue;
       const onHand = getOnHandQty(s.id, p.id);
-      if (onHand <= LOW_STOCK_THRESHOLD) {
-        sumNeed += Math.max(0, RESTOCK_TO - onHand);
+      if (onHand <= lowStockThreshold) {
+        sumNeed += Math.max(0, restockTo - onHand);
       }
     }
 
