@@ -19,12 +19,17 @@ const RESTOCK_TO_DEFAULT = 5;
 // 제작 리스트의 "합계" 탭을 위한 특수 ID
 const ALL_TAB_ID = "__ALL__";
 
+const FILE_PREFIX = "ShopPlanner";
+
 const DASH = {
   inventory: "inventory",
   todo: "todo",
 } as const;
 
 export default function Dashboard() {
+  function safeFilename(name: string) {
+    return name.replace(/[\\\/:*?"<>|]/g, "_").trim();
+  }
 
   // ✅ 데이터(초기엔 로컬 표시)
   const [data, setData] = useState<AppData>(() => loadLocalData());
@@ -165,6 +170,102 @@ export default function Dashboard() {
       console.log("[RT] unsubscribed");
     };
   }, [refreshFromDB]);
+
+  // -----------------------------
+// 📥 CSV 다운로드 유틸
+// -----------------------------
+function downloadCSV(filename: string, rows: string[][]) {
+  const csvContent = rows
+    .map((r) =>
+      r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")
+    )
+    .join("\n");
+
+  const BOM = "\uFEFF"; // ✅ 엑셀 한글 깨짐 방지
+  const blob = new Blob([BOM + csvContent], {
+    type: "text/csv;charset=utf-8;",
+  });
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// -----------------------------
+// 📥 재고 현황 CSV
+// -----------------------------
+const exportInventoryCSV = useCallback(() => {
+  console.log("[CSV] exportInventoryCSV start", new Date().toISOString());
+  const today = new Date().toISOString().slice(0, 10);
+
+  // -----------------------------
+  // 1) 전체 재고 현황 CSV
+  // -----------------------------
+  const allRows: string[][] = [];
+  allRows.push(["입점처", "제품", "현재 재고"]);
+
+  // 정렬: 입점처 → 제품
+  const allItems: Array<{ storeName: string; productLabel: string; qty: number }> = [];
+
+  data.inventory.forEach((inv) => {
+    const store = data.stores.find((s) => s.id === inv.storeId);
+    const product = data.products.find((p) => p.id === inv.productId);
+    if (!store || !product) return;
+
+    allItems.push({
+      storeName: store.name,
+      productLabel: `${product.category ?? "-"} - ${product.name}`,
+      qty: inv.onHandQty,
+    });
+  });
+
+  allItems.sort((a, b) => {
+    const s = a.storeName.localeCompare(b.storeName, "ko");
+    if (s !== 0) return s;
+    return a.productLabel.localeCompare(b.productLabel, "ko");
+  });
+
+  for (const it of allItems) {
+    allRows.push([it.storeName, it.productLabel, String(it.qty)]);
+  }
+
+  downloadCSV(`${FILE_PREFIX}_재고현황_전체_${today}.csv`, allRows);
+
+  // -----------------------------
+  // 2) 입점처별 CSV 여러 개
+  // -----------------------------
+  for (const store of data.stores) {
+    const storeRows: string[][] = [];
+    storeRows.push(["제품", "현재 재고"]);
+
+    const items: Array<{ productLabel: string; qty: number }> = [];
+
+    data.inventory
+      .filter((inv) => inv.storeId === store.id)
+      .forEach((inv) => {
+        const product = data.products.find((p) => p.id === inv.productId);
+        if (!product) return;
+
+        items.push({
+          productLabel: `${product.category ?? "-"} - ${product.name}`,
+          qty: inv.onHandQty,
+        });
+      });
+
+    // 제품 정렬
+    items.sort((a, b) => a.productLabel.localeCompare(b.productLabel, "ko"));
+
+    for (const it of items) {
+      storeRows.push([it.productLabel, String(it.qty)]);
+    }
+
+    const storeSafe = safeFilename(store.name);
+    downloadCSV(`${FILE_PREFIX}_재고현황_${storeSafe}_${today}.csv`, storeRows);
+  }
+}, [data]);
 
   // -----------------------------
   // 4) derived 값들
@@ -319,14 +420,80 @@ const allTodoRows = useMemo(() => {
   }
 
   return out;
-}, [products, stores, isEnabledInStore, getOnHandQty]);
+}, [products, stores, isEnabledInStore, getOnHandQty, lowStockThreshold, restockTo]);
 
-  // 제작 리스트 화면 기본은 합계 탭
-  useEffect(() => {
-    if (dashView === DASH.todo && !selectedStoreId) {
-      setSelectedStoreId(ALL_TAB_ID);
+/// -----------------------------
+// 📥 제작 리스트 CSV (전체=제품별 총합 + 입점처별 파일)
+// -----------------------------
+const exportProductionCSV = useCallback(() => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  // 1) 전체 제작 리스트 (제품별 총합)
+  {
+    const rows: string[][] = [];
+    rows.push(["품목", "제품", "총 필요 수량"]);
+
+    const sortedAllTodo = [...allTodoRows].sort((a, b) => {
+      const ac = (a.product.category ?? "").localeCompare(b.product.category ?? "", "ko");
+      if (ac !== 0) return ac;
+      return a.product.name.localeCompare(b.product.name, "ko");
+    });
+
+    for (const row of sortedAllTodo) {
+      rows.push([row.product.category ?? "-", row.product.name, String(row.totalNeed)]);
     }
-  }, [dashView, selectedStoreId]);
+
+    downloadCSV(`${FILE_PREFIX}_제작리스트_전체_${today}.csv`, rows);
+  }
+
+  // 2) 입점처별 제작 리스트 (각 파일)
+  for (const store of data.stores) {
+    const items: Array<{
+      productLabel: string;
+      onHand: number;
+      need: number;
+    }> = [];
+
+    // 이 입점처의 제품들 중 제작 필요만 모으기
+    for (const p of products) {
+      // 입점처 취급 OFF 제외 + 제작 제외 제외
+      if (!isEnabledInStore(store.id, p.id)) continue;
+      if (p.makeEnabled === false) continue;
+
+      const onHand = getOnHandQty(store.id, p.id);
+      const need = onHand <= lowStockThreshold ? Math.max(0, restockTo - onHand) : 0;
+      if (need <= 0) continue;
+
+      items.push({
+        productLabel: `${p.category ?? "-"} - ${p.name}`,
+        onHand,
+        need,
+      });
+    }
+
+    if (items.length === 0) continue;
+
+    items.sort((a, b) => a.productLabel.localeCompare(b.productLabel, "ko"));
+
+    const storeRows: string[][] = [];
+    storeRows.push(["제품", "현재 재고", "목표 재고", "필요 수량"]);
+
+    for (const it of items) {
+      storeRows.push([it.productLabel, String(it.onHand), String(restockTo), String(it.need)]);
+    }
+
+    const storeSafe = safeFilename(store.name);
+    downloadCSV(`${FILE_PREFIX}_제작리스트_${storeSafe}_${today}.csv`, storeRows);
+  }
+}, [
+  data.stores,
+  products,
+  allTodoRows,
+  getOnHandQty,
+  isEnabledInStore,
+  lowStockThreshold,
+  restockTo,
+]);
 
   // -----------------------------
   // 5) 화면 렌더
@@ -392,6 +559,21 @@ const allTodoRows = useMemo(() => {
           제작 리스트
         </button>
       </div>
+
+      {/* 📥 데이터 다운로드 ← 여기 */}
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "8px 0 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 13, color: "#666" }}>데이터 다운로드</span>
+
+       <button onClick={exportInventoryCSV} className="viewBtn">
+      재고 현황
+       </button>
+
+       <button onClick={exportProductionCSV} className="viewBtn">
+      제작 리스트
+       </button>
+       </div>
+     </div>
 
       {/* 1) 재고 현황 */}
       {dashView === DASH.inventory && (
