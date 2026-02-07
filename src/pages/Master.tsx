@@ -38,11 +38,10 @@ export default function Master() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
     // ✅ 유저별 기본 목표 재고 수량 (profiles.default_target_qty)
-    const [defaultTargetQty, setDefaultTargetQty] = useState<number>(5);
+
     const [defaultTargetQtyInput, setDefaultTargetQtyInput] = useState<string>("5");
     const [profileLoading, setProfileLoading] = useState(true);
     const [profileSaving, setProfileSaving] = useState(false);
-    const [lowStockThreshold, setLowStockThreshold] = useState<number>(2);
     const [lowStockThresholdInput, setLowStockThresholdInput] = useState<string>("2");  
   
     useEffect(() => {
@@ -54,9 +53,7 @@ export default function Master() {
           const profile = await getOrCreateMyProfile();
           if (!alive) return;
   
-          setDefaultTargetQty(profile.default_target_qty);
           setDefaultTargetQtyInput(String(profile.default_target_qty));
-          setLowStockThreshold(profile.low_stock_threshold ?? 2);
           setLowStockThresholdInput(String(profile.low_stock_threshold ?? 2));
         } catch (e) {
           console.error("[profiles] failed to load profile", e);
@@ -401,7 +398,6 @@ const toggleProductMakeEnabled = useCallback(
             ? 0
             : Math.max(0, parseInt(defaultTargetQtyInput, 10) || 0);
 
-        setDefaultTargetQty(val);
         setDefaultTargetQtyInput(String(val));
 
         try {
@@ -437,7 +433,6 @@ const toggleProductMakeEnabled = useCallback(
             ? 0
             : Math.max(0, parseInt(lowStockThresholdInput, 10) || 0);
 
-        setLowStockThreshold(val);
         setLowStockThresholdInput(String(val));
 
         try {

@@ -31,7 +31,6 @@ export default function Dashboard() {
 
     // ✅ 유저별 기본 목표 재고 수량 (profiles.default_target_qty)
     const [restockTo, setRestockTo] = useState<number>(RESTOCK_TO_DEFAULT);
-    const [profileLoading, setProfileLoading] = useState(true); 
   
   const [lowStockThreshold, setLowStockThreshold] = useState<number>(LOW_STOCK_THRESHOLD_DEFAULT);
 
@@ -114,7 +113,6 @@ export default function Dashboard() {
 
     (async () => {
       try {
-        setProfileLoading(true);
         const profile = await getOrCreateMyProfile();
         if (!alive) return;
         setRestockTo(profile.default_target_qty ?? RESTOCK_TO_DEFAULT);
@@ -123,9 +121,7 @@ export default function Dashboard() {
         console.error("[profiles] failed to load profile in dashboard", e);
         if (!alive) return;
         setRestockTo(RESTOCK_TO_DEFAULT);
-      } finally {
-        if (alive) setProfileLoading(false);
-      }
+      } 
     })();
 
     return () => {
