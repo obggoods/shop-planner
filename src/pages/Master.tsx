@@ -1,5 +1,6 @@
 // src/pages/Master.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React from "react";
 import type { AppData, Product, Store, StoreProductState } from "../data/models";
 import { downloadJson, generateId, readJsonFile } from "../data/store";
 import {
@@ -88,6 +89,21 @@ export default function Master() {
     [data.storeProductStates]
   );
 
+  // ✅ 제품 삭제
+  const deleteProduct = useCallback(
+    async (productId: string) => {
+      if (!confirm("이 제품을 삭제할까요?")) return;
+      try {
+        await deleteProductDB(productId);
+        await refresh();
+      } catch (e) {
+        console.error(e);
+        alert("제품 삭제 실패 (로그인 / 권한 / RLS 확인)");
+      }
+    },
+    [refresh]
+  );
+  
   // ✅ 단일 ON/OFF (UI 즉시 반영 + DB upsert)
   const toggleOne = useCallback(
     async (storeId: string, productId: string, nextEnabled: boolean) => {
@@ -160,6 +176,7 @@ export default function Master() {
       name,
       category: newCategory,
       active: true,
+      makeEnabled: true, // ✅ 추가 (기본: 제작 대상)
       createdAt: Date.now(),
     };
 
@@ -173,38 +190,71 @@ export default function Master() {
     }
   }, [newProductName, newCategory, refresh]);
 
-  // ✅ 제품 활성/비활성 (DB 저장 후 refresh)
-  const toggleProductActive = useCallback(
-    async (productId: string) => {
-      const hit = data.products.find((p) => p.id === productId);
-      if (!hit) return;
+  // ✅ 제품 활성/비활성 (즉시 반영 + DB 저장)
+const toggleProductActive = useCallback(
+  async (productId: string) => {
+    const hit = data.products.find((p) => p.id === productId);
+    if (!hit) return;
 
-      const next = { ...hit, active: !hit.active };
+    const next = { ...hit, active: !hit.active };
 
-      try {
-        await createProductDB(next); // upsert로 동작하게 만들어두면 편함
-        await refresh();
-      } catch (e) {
-        console.error(e);
-        alert("제품 활성/비활성 변경 실패 (로그인 / 권한 / RLS 확인)");
-      }
-    },
-    [data.products, refresh]
-  );
+    // ✅ 1) UI 먼저 즉시 반영(optimistic)
+    setData((prev) => ({
+      ...prev,
+      products: prev.products.map((p) => (p.id === productId ? next : p)),
+    }));
 
-  const deleteProduct = useCallback(
-    async (productId: string) => {
-      if (!confirm("이 제품을 삭제할까요?")) return;
-      try {
-        await deleteProductDB(productId);
-        await refresh();
-      } catch (e) {
-        console.error(e);
-        alert("제품 삭제 실패 (로그인 / 권한 / RLS 확인)");
-      }
-    },
-    [refresh]
-  );
+    try {
+      // ✅ 2) DB 저장
+      await createProductDB(next);
+      // ❌ refresh() 제거: 지연/튐의 원인
+    } catch (e) {
+      console.error(e);
+
+      // ✅ 3) 실패 시 롤백
+      setData((prev) => ({
+        ...prev,
+        products: prev.products.map((p) => (p.id === productId ? hit : p)),
+      }));
+
+      alert("제품 활성/비활성 변경 실패 (로그인 / 권한 / RLS 확인)");
+    }
+  },
+  [data.products, setData]
+);
+
+  // ✅ 제품 제작 대상 ON/OFF (즉시 반영 + DB 저장)
+const toggleProductMakeEnabled = useCallback(
+  async (productId: string) => {
+    const hit = data.products.find((p) => p.id === productId);
+    if (!hit) return;
+
+    const next = { ...hit, makeEnabled: !(hit.makeEnabled ?? true) };
+
+    // ✅ 1) UI 먼저 즉시 반영(optimistic)
+    setData((prev) => ({
+      ...prev,
+      products: prev.products.map((p) => (p.id === productId ? next : p)),
+    }));
+
+    try {
+      // ✅ 2) DB 저장
+      await createProductDB(next);
+      // ❌ refresh() 제거
+    } catch (e) {
+      console.error(e);
+
+      // ✅ 3) 실패 시 롤백
+      setData((prev) => ({
+        ...prev,
+        products: prev.products.map((p) => (p.id === productId ? hit : p)),
+      }));
+
+      alert("제품 제작 대상 변경 실패 (로그인 / 권한 / RLS 확인)");
+    }
+  },
+  [data.products, setData]
+);
 
   // ✅ 입점처 추가 (DB 저장 후 refresh)
   const addStore = useCallback(async () => {
@@ -286,58 +336,68 @@ export default function Master() {
   if (errorMsg) return <div style={{ padding: 16, color: "crimson" }}>에러: {errorMsg}</div>;
 
   return (
-    <div>
+    <div className="pageWrap">
+    <div className="pageContainer">
       <h2 style={{ marginTop: 0 }}>마스터 관리</h2>
 
-      <section style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
-        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12, minWidth: 280, flex: 1 }}>
-          <h3 style={{ marginTop: 0 }}>제품 추가</h3>
+      <section className="masterTopGrid">
+  <div className="masterCard masterProducts">
+    <h3 style={{ marginTop: 0 }}>제품 추가</h3>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <select value={newCategory} onChange={(e) => setNewCategory(e.target.value as Category)} style={{ padding: 8, minWidth: 140 }}>
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <select
+        value={newCategory}
+        onChange={(e) => setNewCategory(e.target.value as Category)}
+        style={{ padding: 8, minWidth: 140 }}
+      >
+        {CATEGORIES.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </select>
 
-            <input
-              value={newProductName}
-              onChange={(e) => setNewProductName(e.target.value)}
-              placeholder="예: 미드나잇블루"
-              style={{ flex: 1, padding: 8, minWidth: 200 }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") addProduct();
-              }}
-            />
+      <input
+        value={newProductName}
+        onChange={(e) => setNewProductName(e.target.value)}
+        placeholder="예: 미드나잇블루"
+        style={{ flex: 1, padding: 8, minWidth: 200 }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") addProduct();
+        }}
+      />
 
-            <button onClick={addProduct} style={{ padding: "8px 12px" }}>
-              추가
-            </button>
-          </div>
+      <button onClick={addProduct} style={{ padding: "8px 12px" }}>
+        추가
+      </button>
+    </div>
 
-          <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>* 제품은 DB에 저장돼. (옵션/색상은 2차에서 확장)</p>
-        </div>
+    <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
+      * 제품은 DB에 저장돼. (옵션/색상은 2차에서 확장)
+    </p>
+  </div>
 
-        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12, minWidth: 280, flex: 1 }}>
-          <h3 style={{ marginTop: 0 }}>입점처 추가</h3>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              value={newStoreName}
-              onChange={(e) => setNewStoreName(e.target.value)}
-              placeholder="예: 홍대 A소품샵"
-              style={{ flex: 1, padding: 8 }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") addStore();
-              }}
-            />
-            <button onClick={addStore} style={{ padding: "8px 12px" }}>
-              추가
-            </button>
-          </div>
-        </div>
-      </section>
+  <div className="masterCard masterStores">
+    <h3 style={{ marginTop: 0 }}>입점처 추가</h3>
+
+    <div style={{ display: "flex", gap: 8 }}>
+      <input
+        value={newStoreName}
+        onChange={(e) => setNewStoreName(e.target.value)}
+        placeholder="예: 홍대 A소품샵"
+        style={{ flex: 1, padding: 8 }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") addStore();
+        }}
+      />
+
+      <button onClick={addStore} style={{ padding: "8px 12px" }}>
+        추가
+      </button>
+    </div>
+  </div>
+</section>
+
 
       <section style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
         <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12, minWidth: 280, flex: 1 }}>
@@ -459,42 +519,62 @@ export default function Master() {
         )}
       </section>
 
-      <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <section
+       className="masterTwoCol"
+       style={{
+         display: "grid",
+         gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)",
+         gap: 16,
+       }}
+      >
         <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
           <h3 style={{ marginTop: 0 }}>제품 목록</h3>
           {products.length === 0 ? (
-            <p style={{ color: "#666" }}>아직 제품이 없어요. 위에서 추가해봐.</p>
+            <p style={{ color: "#666" }}>아직 제품이 없어. 위에서 추가해봐.</p>
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
               {products.map((p) => (
                 <li
-                  key={p.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    padding: "8px 0",
-                    borderBottom: "1px solid #eee",
-                    opacity: p.active ? 1 : 0.5,
-                  }}
-                >
-                  <div style={{ display: "flex", flexDirection: "column" }}>
-                    <strong>
-                      [{p.category}] {p.name}
-                    </strong>
-                    <span style={{ fontSize: 12, color: "#666" }}>{p.active ? "활성" : "비활성"}</span>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={() => toggleProductActive(p.id)} style={{ padding: "6px 10px" }}>
-                      {p.active ? "비활성" : "활성"}
-                    </button>
-                    <button onClick={() => deleteProduct(p.id)} style={{ padding: "6px 10px" }}>
-                      삭제
-                    </button>
-                  </div>
-                </li>
+                key={p.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  padding: "8px 0",
+                  borderBottom: "1px solid #eee",
+                  opacity: p.active ? (p.makeEnabled === false ? 0.6 : 1) : 0.4,
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  <strong>
+                    [{p.category}] {p.name}
+                  </strong>
+                  <span style={{ fontSize: 12, color: "#666" }}>
+                    {p.active ? "활성" : "비활성"}
+                    {p.makeEnabled === false ? " · 제작중지" : ""}
+                  </span>
+                </div>
+              
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
+                    <input
+                      type="checkbox"
+                      checked={p.makeEnabled !== false}
+                      onChange={() => toggleProductMakeEnabled(p.id)}
+                    />
+                    제작대상
+                  </label>
+              
+                  <button onClick={() => toggleProductActive(p.id)} style={{ padding: "6px 10px" }}>
+                    {p.active ? "비활성" : "활성"}
+                  </button>
+              
+                  <button onClick={() => deleteProduct(p.id)} style={{ padding: "6px 10px" }}>
+                    삭제
+                  </button>
+                </div>
+              </li>
               ))}
             </ul>
           )}
@@ -503,7 +583,7 @@ export default function Master() {
         <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
           <h3 style={{ marginTop: 0 }}>입점처 목록</h3>
           {stores.length === 0 ? (
-            <p style={{ color: "#666" }}>아직 입점처가 없어요. 위에서 추가해봐.</p>
+            <p style={{ color: "#666" }}>아직 입점처가 없어. 위에서 추가해봐.</p>
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
               {stores.map((s) => (
@@ -527,7 +607,8 @@ export default function Master() {
             </ul>
           )}
         </div>
-      </section>
+        </section>
     </div>
-  );
+  </div>
+);
 }

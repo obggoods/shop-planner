@@ -8,6 +8,7 @@ type DBProduct = {
   name: string;
   category: string | null;
   active: boolean | null;
+  make_enabled?: boolean | null; // ✅ 추가
   created_at: string;
 };
 
@@ -92,7 +93,7 @@ export async function loadDataFromDB(): Promise<AppData> {
   const userId = await requireUserId();
 
   const [productsRes, storesRes, invRes, spsRes] = await Promise.all([
-    supabase.from("products").select("id,name,category,active,created_at").eq("user_id", userId).order("created_at"),
+    supabase.from("products").select("id,name,category,active,make_enabled,created_at").eq("user_id", userId).order("created_at"),
     supabase.from("stores").select("id,name,created_at").eq("user_id", userId).order("created_at"),
     supabase.from("inventory").select("store_id,product_id,on_hand_qty,updated_at").eq("user_id", userId),
     supabase.from("store_product_states").select("store_id,product_id,enabled").eq("user_id", userId),
@@ -126,6 +127,7 @@ export async function loadDataFromDB(): Promise<AppData> {
       name: p.name,
       category: p.category ?? "",
       active: p.active ?? true,
+      makeEnabled: p.make_enabled ?? true,
       createdAt: new Date(p.created_at).getTime(),
     })),
     stores: stores.map((s) => ({
@@ -296,6 +298,7 @@ export async function createProductDB(p: Product): Promise<void> {
         name: p.name,
         category: p.category ?? "",
         active: p.active ?? true,
+        make_enabled: p.makeEnabled ?? true, // ✅ 추가
         created_at: new Date(p.createdAt).toISOString(),
       },
       { onConflict: "user_id,id" }

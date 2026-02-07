@@ -7,6 +7,7 @@ export type Product = {
     category: string;   // ✅ 추가
     active: boolean;
     createdAt: number;
+    makeEnabled?: boolean; // 제작 대상 여부 (기본 true)
   };
 
 export type Store = {

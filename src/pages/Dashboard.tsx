@@ -1,5 +1,4 @@
-// src/pages/Dashboard.tsx
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import type { AppData } from "../data/models";
 import { loadData as loadLocalData, upsertInventoryItem as upsertLocalInventory } from "../data/store";
 import { supabase } from "../lib/supabaseClient";
@@ -34,6 +33,8 @@ export default function Dashboard() {
   // ✅ DB 로드 상태
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const [showDisabledProducts, setShowDisabledProducts] = useState(false);
 
   // ✅ 화면 상태
   const [selectedStoreId, setSelectedStoreId] = useState<string>("");
@@ -149,24 +150,61 @@ export default function Dashboard() {
     [data.stores]
   );
 
+  // inventory index: storeId::productId -> onHandQty
+const invIndex = useMemo(() => {
+  const m = new Map<string, number>();
+  for (const it of data.inventory) {
+    m.set(`${it.storeId}::${it.productId}`, it.onHandQty);
+  }
+  return m;
+}, [data.inventory]);
+
+const getOnHandQty = useCallback(
+  (storeId: string, productId: string) => {
+    return invIndex.get(`${storeId}::${productId}`) ?? 0;
+  },
+  [invIndex]
+);
+
+  // ✅ 재고 저장 디바운스 타이머
+const invSaveTimers = useRef<Record<string, number>>({});
+
+// ✅ 재고 저장 예약(디바운스)
+const scheduleInventorySave = useCallback(
+  (storeId: string, productId: string, qty: number) => {
+    const key = `${storeId}__${productId}`;
+
+    // 기존 예약 취소
+    const prev = invSaveTimers.current[key];
+    if (prev) window.clearTimeout(prev);
+
+    // 500ms 뒤에 DB 저장 1번만 실행
+    invSaveTimers.current[key] = window.setTimeout(async () => {
+      try {
+        await upsertInventoryItemDB({
+          storeId,
+          productId,
+          onHandQty: qty,
+        });
+      } catch (e) {
+        console.error(e);
+        alert("재고 저장 실패 (로그인 / 권한 / RLS 확인)");
+      }
+    }, 500);
+  },
+  []
+);  
+
 // ✅ 입점처별 제품 활성화 여부
 const isEnabledInStore = useCallback(
-    (storeId: string, productId: string) => {
-      const hit = data.storeProductStates?.find(
-        (x) => x.storeId === storeId && x.productId === productId
-      );
-  
-      console.log("[SPS]", {
-        storeId,
-        productId,
-        hit,
-        total: data.storeProductStates?.length,
-      });
-  
-      return hit?.enabled ?? true; // 기본값: 설정 없으면 활성
-    },
-    [data.storeProductStates]
-  );  
+  (storeId: string, productId: string) => {
+    const hit = data.storeProductStates.find(
+      (x) => x.storeId === storeId && x.productId === productId
+    );
+    return hit ? hit.enabled : true; // 기본값 true
+  },
+  [data.storeProductStates]
+);
 
   const products = useMemo(() => {
     return [...data.products]
@@ -184,21 +222,35 @@ const isEnabledInStore = useCallback(
     return products.filter((p) => isEnabledInStore(selectedStoreId, p.id));
   }, [products, selectedStoreId, isEnabledInStore]);
 
-  // inventory index: storeId::productId -> onHandQty
-  const invIndex = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const it of data.inventory) {
-      m.set(`${it.storeId}::${it.productId}`, it.onHandQty);
-    }
-    return m;
-  }, [data.inventory]);
 
-  const getOnHandQty = useCallback(
-    (storeId: string, productId: string) => {
-      return invIndex.get(`${storeId}::${productId}`) ?? 0;
-    },
-    [invIndex]
-  );
+  // ✅ 재고 현황 탭에서: 선택 입점처 기준으로 (ON 제품 먼저, OFF 제품은 접기/펼치기)
+const { enabledProducts, disabledProducts, productsForInventory } = useMemo(() => {
+  // 입점처 선택 전이면 기존 정렬 그대로
+  if (!selectedStoreId || selectedStoreId === ALL_TAB_ID) {
+    return {
+      enabledProducts: products,
+      disabledProducts: [] as typeof products,
+      productsForInventory: products,
+    };
+  }
+
+  const enabled: typeof products = [];
+  const disabled: typeof products = [];
+
+  for (const p of products) {
+    (isEnabledInStore(selectedStoreId, p.id) ? enabled : disabled).push(p);
+  }
+
+  return {
+    enabledProducts: enabled,
+    disabledProducts: disabled,
+    productsForInventory: showDisabledProducts ? [...enabled, ...disabled] : enabled,
+  };
+}, [products, selectedStoreId, isEnabledInStore, showDisabledProducts]);
+
+useEffect(() => {
+  setShowDisabledProducts(false);
+}, [selectedStoreId]);
 
   // 선택 입점처 총 재고
   const totalOnHand = useMemo(() => {
@@ -215,6 +267,7 @@ const isEnabledInStore = useCallback(
     if (!selectedStoreId || selectedStoreId === ALL_TAB_ID) return [];
 
     return visibleProductsForSelectedStore
+      .filter((p) => p.makeEnabled !== false) // 제작 제외
       .map((p) => {
         const onHand = getOnHandQty(selectedStoreId, p.id);
         const need = onHand <= LOW_STOCK_THRESHOLD ? Math.max(0, RESTOCK_TO - onHand) : 0;
@@ -224,25 +277,27 @@ const isEnabledInStore = useCallback(
   }, [selectedStoreId, visibleProductsForSelectedStore, getOnHandQty]);
 
   // 전체 제작 리스트(합계)
-  const allTodoRows = useMemo(() => {
-    const out: Array<{ product: (typeof products)[number]; totalNeed: number }> = [];
+const allTodoRows = useMemo(() => {
+  const out: Array<{ product: (typeof products)[number]; totalNeed: number }> = [];
 
-    for (const p of products) {
-      let sumNeed = 0;
+  for (const p of products) {
+    if (p.makeEnabled === false) continue; // 제작 제외(단종/제작중지)
 
-      for (const s of stores) {
-        if (!isEnabledInStore(s.id, p.id)) continue;
-        const onHand = getOnHandQty(s.id, p.id);
-        if (onHand <= LOW_STOCK_THRESHOLD) {
-          sumNeed += Math.max(0, RESTOCK_TO - onHand);
-        }
+    let sumNeed = 0;
+
+    for (const s of stores) {
+      if (!isEnabledInStore(s.id, p.id)) continue;
+      const onHand = getOnHandQty(s.id, p.id);
+      if (onHand <= LOW_STOCK_THRESHOLD) {
+        sumNeed += Math.max(0, RESTOCK_TO - onHand);
       }
-
-      if (sumNeed > 0) out.push({ product: p, totalNeed: sumNeed });
     }
 
-    return out;
-  }, [products, stores, isEnabledInStore, getOnHandQty]);
+    if (sumNeed > 0) out.push({ product: p, totalNeed: sumNeed });
+  }
+
+  return out;
+}, [products, stores, isEnabledInStore, getOnHandQty]);
 
   // 제작 리스트 화면 기본은 합계 탭
   useEffect(() => {
@@ -287,14 +342,15 @@ const isEnabledInStore = useCallback(
 
   // ✅ 대시보드 페이지
   return (
-    <div>
+    <div className="pageWrap">
+    <div className="pageContainer">
       <h2 className="pageTitle">대시보드</h2>
 
       <div className="summaryRow">
         <Card title="입점처" value={`${stores.length}`} />
         <Card title="활성 제품" value={`${products.length}`} />
         <Card title="선택 입점처 총 재고" value={`${totalOnHand}`} />
-      </div>
+        </div>
 
       {/* 화면 전환 버튼 */}
       <div className="viewSwitch">
@@ -339,6 +395,19 @@ const isEnabledInStore = useCallback(
                   위 탭에서 입점처를 선택해줘.
                 </p>
               ) : (
+                <>
+                {disabledProducts.length > 0 && (
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="viewBtn"
+                      onClick={() => setShowDisabledProducts((v) => !v)}
+                    >
+                      {showDisabledProducts ? "OFF 제품 접기" : `OFF 제품 ${disabledProducts.length}개 펼치기`}
+                    </button>
+                  </div>
+                )}
+
                 <div className="tableWrap">
                   <table className="table">
                     <thead>
@@ -349,7 +418,7 @@ const isEnabledInStore = useCallback(
                       </tr>
                     </thead>
                     <tbody>
-                      {products.map((p) => {
+                      {productsForInventory.map((p) => {
                         const enabled = isEnabledInStore(selectedStoreId, p.id);
                         const onHand = getOnHandQty(selectedStoreId, p.id);
 
@@ -358,40 +427,46 @@ const isEnabledInStore = useCallback(
                             <td>{p.category ?? "-"}</td>
                             <td>{p.name}</td>
                             <td className="numCol">
-                              <input
-                                type="number"
-                                min={0}
-                                value={onHand}
-                                disabled={!enabled}
-                                onChange={async (e) => {
-                                  if (!enabled) return;
+                            <input
+  className="qtyInput"
+  type="number"
+  inputMode="numeric"
+  value={onHand === 0 ? "" : onHand}
+  placeholder="0"
+  onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+  onChange={(e) => {
+    const raw = e.target.value;          // 빈칸이면 ""
+    const nextQty = raw === "" ? 0 : Number(raw);
 
-                                  const qtyRaw = Number(e.target.value);
-                                  const nextQty = Number.isFinite(qtyRaw) ? Math.max(0, qtyRaw) : 0;
+    // 1) UI 즉시 반영
+    setData((prev) => {
+      const storeId = selectedStoreId;
+      const productId = p.id;
 
-                                  // 1) UI 즉시 반영
-                                  setData((prev) =>
-                                    upsertLocalInventory(prev, {
-                                      storeId: selectedStoreId,
-                                      productId: p.id,
-                                      onHandQty: nextQty,
-                                    })
-                                  );
+      const idx = prev.inventory.findIndex(
+        (it) => it.storeId === storeId && it.productId === productId
+      );
 
-                                  // 2) DB 저장
-                                  try {
-                                    await upsertInventoryItemDB({
-                                      storeId: selectedStoreId,
-                                      productId: p.id,
-                                      onHandQty: nextQty,
-                                    });
-                                  } catch (err) {
-                                    console.error(err);
-                                    alert("DB 저장 실패. 네트워크/로그인 상태를 확인해줘.");
-                                  }
-                                }}
-                                className="qtyInput"
-                              />
+      if (idx === -1) {
+        return {
+          ...prev,
+          inventory: [
+            ...prev.inventory,
+            { storeId, productId, onHandQty: nextQty, updatedAt: Date.now() },
+          ],
+        };
+      }
+
+      const nextInv = [...prev.inventory];
+      nextInv[idx] = { ...nextInv[idx], onHandQty: nextQty, updatedAt: Date.now() };
+      return { ...prev, inventory: nextInv };
+    });
+
+    // 2) DB 저장 디바운스
+    scheduleInventorySave(selectedStoreId, p.id, nextQty);
+  }}
+/>
+
                             </td>
                           </tr>
                         );
@@ -399,6 +474,7 @@ const isEnabledInStore = useCallback(
                     </tbody>
                   </table>
                 </div>
+                </>
               )}
             </>
           )}
@@ -492,8 +568,9 @@ const isEnabledInStore = useCallback(
           )}
         </section>
       )}
-    </div>
-  );
+   </div>
+  </div>
+ );
 }
 
 // -----------------------------
