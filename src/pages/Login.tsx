@@ -43,7 +43,7 @@ export default function Login() {
 
   return (
     <div style={{ maxWidth: 420, margin: "60px auto", padding: 16 }}>
-      <h2 style={{ marginBottom: 8 }}>Shop Planner</h2>
+      <h2 style={{ marginBottom: 8 }}>스톡앤메이크 | 재고·제작 관리</h2>
       <p style={{ marginTop: 0, opacity: 0.7 }}>Supabase 이메일 로그인</p>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>

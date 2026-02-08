@@ -362,27 +362,38 @@ const isEnabledInStore = useCallback(
 
 
   // ✅ 재고 현황 탭에서: 선택 입점처 기준으로 (ON 제품 먼저, OFF 제품은 접기/펼치기)
-const { disabledProducts, productsForInventory } = useMemo(() => {
-  // 입점처 선택 전이면 기존 정렬 그대로
-  if (!selectedStoreId || selectedStoreId === ALL_TAB_ID) {
+  const { disabledProducts, productsForInventory } = useMemo(() => {
+    if (!selectedStoreId || selectedStoreId === ALL_TAB_ID) {
+      // 전체/미선택 상태에서도: 단종은 맨 아래로
+      const normal = products.filter((p) => p.makeEnabled !== false);
+      const discontinued = products.filter((p) => p.makeEnabled === false);
+      return {
+        disabledProducts: [] as typeof products,
+        productsForInventory: [...normal, ...discontinued],
+      };
+    }
+  
+    const enabled: typeof products = [];
+    const disabled: typeof products = [];
+  
+    for (const p of products) {
+      (isEnabledInStore(selectedStoreId, p.id) ? enabled : disabled).push(p);
+    }
+  
+    // ✅ ON 목록에서만 단종을 아래로
+    const enabledNormal = enabled.filter((p) => p.makeEnabled !== false);
+    const enabledDiscontinued = enabled.filter((p) => p.makeEnabled === false);
+  
+    const disabledNormal = disabled.filter((p) => p.makeEnabled !== false);
+    const disabledDiscontinued = disabled.filter((p) => p.makeEnabled === false);
+  
     return {
-      disabledProducts: [] as typeof products,
-      productsForInventory: products,
+      disabledProducts: disabled,
+      productsForInventory: showDisabledProducts
+        ? [...enabledNormal, ...enabledDiscontinued, ...disabledNormal, ...disabledDiscontinued]
+        : [...enabledNormal, ...enabledDiscontinued],
     };
-  }
-
-  const enabled: typeof products = [];
-  const disabled: typeof products = [];
-
-  for (const p of products) {
-    (isEnabledInStore(selectedStoreId, p.id) ? enabled : disabled).push(p);
-  }
-
-  return {
-    disabledProducts: disabled,
-    productsForInventory: showDisabledProducts ? [...enabled, ...disabled] : enabled,
-  };
-}, [products, selectedStoreId, isEnabledInStore, showDisabledProducts]);
+  }, [products, selectedStoreId, isEnabledInStore, showDisabledProducts]);  
 
 useEffect(() => {
   setShowDisabledProducts(false);
@@ -514,7 +525,7 @@ const exportProductionCSV = useCallback(() => {
 if (errorMsg) {
   return (
     <div style={{ padding: 16 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>Shop Planner</div>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>스톡앤메이크</div>
       <h2 style={{ marginTop: 0 }}>DB 로드 실패</h2>
       <div style={{ padding: 12, background: "#f3f4f6", borderRadius: 8 }}>{errorMsg}</div>
       <button
@@ -649,53 +660,64 @@ if (errorMsg) {
                         const onHand = getOnHandQty(selectedStoreId, p.id);
 
                         return (
-                          <tr key={p.id} className={!enabled ? "rowDisabled" : undefined}>
-                            <td>{p.category ?? "-"}</td>
-                            <td>{p.name}</td>
-                            <td className="numCol">
-                            <input
-  className="qtyInput"
-  type="number"
-  inputMode="numeric"
-  disabled={loading}
-  value={onHand === 0 ? "" : onHand}
-  placeholder="0"
-  onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-  onChange={(e) => {
-    const raw = e.target.value;          // 빈칸이면 ""
-    const nextQty = raw === "" ? 0 : Number(raw);
+                          <tr
+  key={p.id}
+  className={[
+    !enabled ? "rowDisabled" : "",
+    enabled && p.makeEnabled === false ? "rowDiscontinued" : "",
+  ]
+    .filter(Boolean)
+    .join(" ")}
+>
+  {/* 1열: 품목(카테고리) */}
+  <td>{p.category ?? "-"}</td>
 
-    // 1) UI 즉시 반영
-    setData((prev) => {
-      const storeId = selectedStoreId;
-      const productId = p.id;
+  {/* 2열: 제품명 */}
+  <td>{p.name}</td>
 
-      const idx = prev.inventory.findIndex(
-        (it) => it.storeId === storeId && it.productId === productId
-      );
+  {/* 3열: 현재 재고 입력 */}
+  <td className="numCol">
+    <input
+      className="qtyInput"
+      type="number"
+      inputMode="numeric"
+      disabled={loading}
+      value={onHand === 0 ? "" : onHand}
+      placeholder="0"
+      onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+      onChange={(e) => {
+        const raw = e.target.value;
+        const nextQty = raw === "" ? 0 : Number(raw);
 
-      if (idx === -1) {
-        return {
-          ...prev,
-          inventory: [
-            ...prev.inventory,
-            { storeId, productId, onHandQty: nextQty, updatedAt: Date.now() },
-          ],
-        };
-      }
+        setData((prev) => {
+          const storeId = selectedStoreId;
+          const productId = p.id;
 
-      const nextInv = [...prev.inventory];
-      nextInv[idx] = { ...nextInv[idx], onHandQty: nextQty, updatedAt: Date.now() };
-      return { ...prev, inventory: nextInv };
-    });
+          const idx = prev.inventory.findIndex(
+            (it) => it.storeId === storeId && it.productId === productId
+          );
 
-    // 2) DB 저장 디바운스
-    scheduleInventorySave(selectedStoreId, p.id, nextQty);
-  }}
-/>
+          if (idx === -1) {
+            return {
+              ...prev,
+              inventory: [
+                ...prev.inventory,
+                { storeId, productId, onHandQty: nextQty, updatedAt: Date.now() },
+              ],
+            };
+          }
 
-                            </td>
-                          </tr>
+          const nextInv = [...prev.inventory];
+          nextInv[idx] = { ...nextInv[idx], onHandQty: nextQty, updatedAt: Date.now() };
+          return { ...prev, inventory: nextInv };
+        });
+
+        scheduleInventorySave(selectedStoreId, p.id, nextQty);
+      }}
+    />
+  </td>
+</tr>
+
                         );
                       })}
                     </tbody>

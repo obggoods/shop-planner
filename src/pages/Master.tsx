@@ -39,7 +39,6 @@ const EMPTY: AppData = {
 
 export default function Master() {
   const [data, setData] = useState<AppData>(EMPTY);
-  const CATS_SEEDED_KEY = "ShopPlanner::categories_seeded_v1";
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // ✅ refresh 중복 호출 방지(동시에 여러 refresh가 돌지 않게)
@@ -80,6 +79,8 @@ const refreshQueuedRef = useRef(false);
 
   // ✅ 카테고리 콤보박스
   const [newCategory, setNewCategory] = useState<string>("");
+  // ✅ 카테고리 경고는 '직접 타이핑' 중복일 때만 띄우기 위한 플래그
+const [categoryTyped, setCategoryTyped] = useState(false);
   const [categoryOpen, setCategoryOpen] = useState(false);
   const categoryWrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -119,6 +120,7 @@ const refreshQueuedRef = useRef(false);
     setCategories((prev) => [c, ...prev]);
     setCategoryOpen(false);
     setNewCategory("");
+    setCategoryTyped(false);
 
     try {
       // ✅ 2) DB 저장
@@ -200,57 +202,7 @@ const refreshQueuedRef = useRef(false);
     }
   }, []);  
 
-  // ✅ categories 테이블 로드 + (필요 시) products 기반으로 1회 seed
-  const refreshCategories = useCallback(async () => {
-    try {
-      // 1) 먼저 DB(categories)에서 로드
-      const cats = await loadCategoriesDB();
-
-      // 이미 categories가 있으면 그대로 사용
-      if (cats.length > 0) {
-        setCategories(cats);
-        return;
-      }
-
-      // 2) categories가 비어있으면: seed를 이미 했는지 체크(1회만)
-      const alreadySeeded = localStorage.getItem(CATS_SEEDED_KEY) === "1";
-      if (alreadySeeded) {
-        setCategories([]); // 비어있는 상태 유지
-        return;
-      }
-
-      // 3) products에서 카테고리 후보 뽑기(값이 있는 경우에만)
-      const fromProducts = Array.from(
-        new Set(
-          (data.products ?? [])
-            .map((p) => (p.category ?? "").trim())
-            .filter((v) => v.length > 0)
-        )
-      ).sort((a, b) => a.localeCompare(b, "ko"));
-
-      // products에도 없으면 seed할 필요 없음
-      if (fromProducts.length === 0) {
-        setCategories([]);
-        return;
-      }
-
-      // 4) ✅ seed (카테고리 upsert)
-      await Promise.all(fromProducts.map((c) => upsertCategoryDB(c)));
-
-      // 5) ✅ 1회만 실행되도록 플래그 저장
-      localStorage.setItem(CATS_SEEDED_KEY, "1");
-
-      // 6) seed 후 다시 로드해서 state 반영
-      const cats2 = await loadCategoriesDB();
-      setCategories(cats2);
-    } catch (e) {
-      console.error("[categories] refreshCategories failed", e);
-    }
-  }, [data.products]);
-
-  useEffect(() => {
-    refreshCategories();
-  }, [refreshCategories]);
+  
 
   useEffect(() => {
     let alive = true;
@@ -272,7 +224,43 @@ const refreshQueuedRef = useRef(false);
     };
   }, [refresh]);
 
-  const products = useMemo(() => sortByCreatedAtDesc(data.products), [data.products]);
+  const products = useMemo(() => {
+    // 0) 기본(안전장치): 최신(createdAt desc)
+    const base = sortByCreatedAtDesc(data.products);
+  
+    // 1) 상단 그룹: 활성 && 제작대상
+    const isTop = (p: Product) => p.active && p.makeEnabled !== false;
+  
+    // 2) 문자열 정렬용(카테고리/이름)
+    const catKey = (p: Product) => (p.category ?? "미분류").trim();
+    const nameKey = (p: Product) => p.name.trim();
+  
+    return [...base].sort((a, b) => {
+      const aTop = isTop(a);
+      const bTop = isTop(b);
+  
+      // ✅ Top 그룹 먼저
+      if (aTop !== bTop) return aTop ? -1 : 1;
+  
+      // ✅ Top 그룹 내부는 카테고리/이름 가나다순
+      if (aTop && bTop) {
+        const c = catKey(a).localeCompare(catKey(b), "ko");
+        if (c !== 0) return c;
+  
+        const n = nameKey(a).localeCompare(nameKey(b), "ko");
+        if (n !== 0) return n;
+  
+        // 완전 동일할 때만 최신순
+        return b.createdAt - a.createdAt;
+      }
+  
+      // ✅ 둘 다 Top이 아니면(비활성/제작중지) 기존 base 순서 유지
+      // sort 안정성이 브라우저마다 다를 수 있어도,
+      // 아래는 createdAt desc로 한 번 더 고정해줌
+      return b.createdAt - a.createdAt;
+    });
+  }, [data.products]);  
+  
   const stores = useMemo(() => sortByCreatedAtDesc(data.stores), [data.stores]);
 
   const isEnabledInStore = useCallback(
@@ -472,6 +460,7 @@ const refreshQueuedRef = useRef(false);
     const name = newProductName.trim();
     const categoryToSave = newCategory.trim() === "" ? null : newCategory.trim();
     if (!name) return;
+    console.log("[ADD] click", { name, categoryToSave });
 
     const p: Product = {
       id: generateId("p"),
@@ -503,6 +492,7 @@ const refreshQueuedRef = useRef(false);
 
     setNewProductName("");
     setNewCategory("");
+    setCategoryTyped(false);
 
     try {
       // ✅ 3) DB 반영: 카테고리 먼저 upsert -> 제품 upsert
@@ -510,11 +500,13 @@ const refreshQueuedRef = useRef(false);
         await upsertCategoryDB(categoryToSave);
       }
       await createProductDB(p);
+      console.log("[ADD] db ok", { productId: p.id });
     } catch (e: any) {
       console.error(e);
+      console.error("[ADD] db fail", e);
       setData((prev) => ({ ...prev, products: prevProducts, updatedAt: Date.now() }));
       setCategories(prevCategories);
-      alert(`제품 추가 실패: ${e?.message ?? e}`);
+      alert(`제품 추가 실패: ${e?.message ?? e?.error?.message ?? JSON.stringify(e)}`);
       await refresh();
     }
   }, [newProductName, newCategory, data.products, categories, refresh]);
@@ -805,6 +797,7 @@ const refreshQueuedRef = useRef(false);
                 <input
                   value={newCategory}
                   onChange={(e) => {
+                    setCategoryTyped(true);            // ✅ 사용자가 타이핑함
                     setNewCategory(e.target.value);
                     setCategoryOpen(true);
                   }}
@@ -827,18 +820,19 @@ const refreshQueuedRef = useRef(false);
                   }}
                 />
 
-                {isExistingCategory && (
-                  <div
-                    style={{
-                      marginTop: 4,
-                      fontSize: 12,
-                      color: "#9ca3af",
-                      userSelect: "none",
-                    }}
-                  >
-                    이미 존재하는 카테고리입니다
-                  </div>
-                )}
+{isExistingCategory && categoryTyped && (
+  <div
+    style={{
+      marginTop: 4,
+      fontSize: 12,
+      color: "#9ca3af",
+      userSelect: "none",
+    }}
+  >
+    이미 존재하는 카테고리입니다
+  </div>
+)}
+
 
                 {categoryOpen && categoryOptions.length > 0 && (
                   <div
@@ -877,6 +871,7 @@ const refreshQueuedRef = useRef(false);
                           }}
                           onMouseDown={(e) => {
                             e.preventDefault();
+                            setCategoryTyped(false);           // ✅ 선택으로 들어온 값
                             setNewCategory(c);
                             setCategoryOpen(false);
                           }}

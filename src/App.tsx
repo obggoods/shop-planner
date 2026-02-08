@@ -54,7 +54,7 @@ export default function App() {
           borderBottom: "1px solid #e5e7eb",
         }}
       >
-        <div style={{ fontWeight: 700 }}>Shop Planner</div>
+        <div style={{ fontWeight: 700 }}>스톡앤메이크</div>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
           <div style={{ opacity: 0.7, fontSize: 13 }}>{session.user.email}</div>
           <button onClick={onLogout}>로그아웃</button>

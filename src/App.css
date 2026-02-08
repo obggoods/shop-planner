@@ -22,7 +22,7 @@ html {
 
 .pageContainer {
   width: 100%;
-  max-width: 860px; /* ✅ 전체 폭 줄이기: 1000~1200 사이 추천 */
+  max-width: 860px;
   padding: 24px 16px;
 }
 
@@ -92,6 +92,7 @@ html {
   z-index: 2;
 }
 
+/* (옵션) 탭 아래 패널 스타일 - 현재 코드에서 쓰면 유지 */
 .sheetPanel {
   border: 1px solid #e5e7eb;
   border-radius: 12px;
@@ -251,17 +252,30 @@ html {
   width: 100%;
   margin-top: 12px;
   overflow-x: auto;
+  display: block;
+  text-align: left;
 }
 
+/* ✅ 테이블은 "고정 레이아웃"으로 통일 (컬럼 흔들림 방지)
+   - width/overflow 관련 이슈 해결하려고 !important 남발하던 걸 제거하고
+   - 여기서만 기준을 하나로 잡는다.
+*/
 .table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
+  margin: 0;
 }
 
+/* 헤더/셀 공통 */
 .table thead tr {
   text-align: left;
   border-bottom: 1px solid #e5e7eb;
+  height: 38px;
+}
+
+.table tbody tr {
+  height: 40px;
 }
 
 .table th,
@@ -281,23 +295,39 @@ html {
   border-bottom: 1px solid #f2f2f2;
 }
 
-.table tbody tr {
-  height: 40px;
-}
-.table thead tr {
-  height: 38px;
-}
-
+/* ✅ 공통 숫자 컬럼 */
 .numCol {
-  width: 72px;
+  width: 120px; /* 현재 재고/만들기 등 오른쪽 컬럼 폭 통일 */
   text-align: right;
   white-space: nowrap;
 }
 
-/* 미취급 제품 행 */
-.rowDisabled {
-  color: #9ca3af;
+/* ✅ 1열(품목) 폭: Dashboard에서 inline style(140) 쓰고 있으니
+   CSS에서도 기본값 맞춰줌 (일관성)
+*/
+.table th:first-child,
+.table td:first-child {
+  width: 140px;
+}
+
+/* =========================================
+   Row states (OFF / 단종)
+========================================= */
+/* 미취급 제품 행(OFF) */
+.table tbody tr.rowDisabled td {
   background: #fafafa;
+  color: #9ca3af;
+}
+
+/* 단종(제작중지) + ON 인 경우만 아주 연한 회색 */
+.table tbody tr.rowDiscontinued td {
+  background-color: rgba(0, 0, 0, 0.03);
+}
+
+/* 단종 + OFF는 OFF 스타일만 적용 */
+.table tbody tr.rowDisabled.rowDiscontinued td {
+  background: #fafafa;
+  color: #9ca3af;
 }
 
 /* =========================================
@@ -316,7 +346,6 @@ html {
   margin-left: auto;
 }
 
-/* 비활성 재고 입력 */
 .qtyInput:disabled {
   background: #f3f4f6;
   color: #9ca3af;
@@ -332,7 +361,10 @@ html {
 .qtyInput {
   -moz-appearance: textfield;
 }
-/* ===== Master 상단(제품 추가 / 입점처 추가) 레이아웃 비율 조정 ===== */
+
+/* =========================================
+   Master layout (상단 카드 비율)
+========================================= */
 .masterTopGrid {
   display: flex;
   gap: 16px;
@@ -348,11 +380,11 @@ html {
 }
 
 .masterProducts {
-  flex: 2; /* ✅ 제품 영역 더 넓게 */
+  flex: 2;
 }
 
 .masterStores {
-  flex: 1; /* ✅ 입점처 영역은 상대적으로 좁게 */
+  flex: 1;
 }
 
 @media (max-width: 900px) {
