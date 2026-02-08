@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import type { AppData } from "../data/models";
 import { loadData as loadLocalData } from "../data/store";
-import { supabase, getOrCreateMyProfile } from "../lib/supabaseClient";
+import { getOrCreateMyProfile } from "../lib/supabaseClient";
 
 import {
   loadDataFromDB,
@@ -183,43 +183,6 @@ useEffect(() => {
       alive = false;
     };
   }, []);
-
-  // -----------------------------
-  // 3) ✅ Realtime 구독(4개 테이블) → 변경 시 refreshFromDB()
-  // -----------------------------
-  useEffect(() => {
-    let active = true;
-    let timer: number | null = null;
-
-    const scheduleRefresh = () => {
-      if (!active) return;
-      if (timer) window.clearTimeout(timer);
-
-      // 이벤트 폭주 디바운스
-      timer = window.setTimeout(() => {
-        refreshFromDB().catch((e) => console.error("[RT] refresh error", e));
-      }, 250);
-    };
-
-    console.log("[RT] subscribe start");
-
-    const channel = supabase
-      .channel("shop-planner-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "products" }, scheduleRefresh)
-      .on("postgres_changes", { event: "*", schema: "public", table: "stores" }, scheduleRefresh)
-      .on("postgres_changes", { event: "*", schema: "public", table: "inventory" }, scheduleRefresh)
-      .on("postgres_changes", { event: "*", schema: "public", table: "store_product_states" }, scheduleRefresh)
-      .subscribe((status) => {
-        console.log("[RT] status =", status);
-      });
-
-    return () => {
-      active = false;
-      if (timer) window.clearTimeout(timer);
-      supabase.removeChannel(channel);
-      console.log("[RT] unsubscribed");
-    };
-  }, [refreshFromDB]);
 
   // -----------------------------
 // 📥 CSV 다운로드 유틸
