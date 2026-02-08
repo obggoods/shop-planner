@@ -4,7 +4,7 @@ export type Id = string;
 export type Product = {
     id: Id;
     name: string;
-    category: string;   // ✅ 추가
+    category: string | null;   // ✅ 추가
     active: boolean;
     createdAt: number;
     makeEnabled?: boolean; // 제작 대상 여부 (기본 true)
@@ -54,7 +54,7 @@ export type AppData = {
 
 export type TargetStock = {
     storeId: Id;
-    category: string; // 품목
+    category: string | null;
     targetQty: number; // 목표 재고
     updatedAt: number;
   };

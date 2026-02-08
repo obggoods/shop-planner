@@ -1,14 +1,18 @@
 // src/data/store.supabase.ts
 import { supabase } from "../lib/supabaseClient";
 import type { AppData, Product, Store } from "./models";
-import { createEmptyData, loadData as loadLocalData } from "./store";
+import { createEmptyData } from "./store";
+
+/* =========================
+   DB Row Types
+========================= */
 
 type DBProduct = {
   id: string;
   name: string;
   category: string | null;
   active: boolean | null;
-  make_enabled?: boolean | null; // ✅ 추가
+  make_enabled: boolean | null;
   created_at: string;
 };
 
@@ -25,6 +29,10 @@ type DBInventory = {
   updated_at: string;
 };
 
+/* =========================
+   Auth Helper
+========================= */
+
 async function requireUserId(): Promise<string> {
   const { data, error } = await supabase.auth.getUser();
   if (error) throw error;
@@ -32,45 +40,37 @@ async function requireUserId(): Promise<string> {
   return data.user.id;
 }
 
-/**
- * store_product_states에 (storeId x productId) 조합이 없으면 enabled=true로 채워 넣음
- * - 신제품 추가 / 신규 입점처 추가 때 호출하면 “비활성화 동기화” 문제가 거의 사라짐
- */
+/* =========================
+   Store × Product Seed
+========================= */
+
 export async function ensureStoreProductStatesSeedDB(input: {
   storeIds: string[];
   productIds: string[];
 }): Promise<void> {
   const userId = await requireUserId();
-
   if (input.storeIds.length === 0 || input.productIds.length === 0) return;
 
-  // 1) 현재 존재하는 조합 조회
-  const { data: existing, error: selErr } = await supabase
+  const { data: existing, error } = await supabase
     .from("store_product_states")
     .select("store_id,product_id")
     .eq("user_id", userId);
 
-  if (selErr) throw selErr;
+  if (error) throw error;
 
-  const exists = new Set<string>((existing ?? []).map((r: any) => `${r.store_id}__${r.product_id}`));
-
-  // 2) 없는 조합만 만들기
-  const toInsert: Array<{
-    user_id: string;
-    store_id: string;
-    product_id: string;
-    enabled: boolean;
-    updated_at: string;
-  }> = [];
+  const exists = new Set(
+    (existing ?? []).map((r: any) => `${r.store_id}__${r.product_id}`)
+  );
 
   const now = new Date().toISOString();
+  const rows: any[] = [];
 
   for (const storeId of input.storeIds) {
     for (const productId of input.productIds) {
       const key = `${storeId}__${productId}`;
       if (exists.has(key)) continue;
 
-      toInsert.push({
+      rows.push({
         user_id: userId,
         store_id: storeId,
         product_id: productId,
@@ -80,39 +80,60 @@ export async function ensureStoreProductStatesSeedDB(input: {
     }
   }
 
-  if (toInsert.length === 0) return;
+  if (rows.length === 0) return;
 
-  const { error: insErr } = await supabase.from("store_product_states").insert(toInsert);
+  const { error: insErr } = await supabase
+    .from("store_product_states")
+    .insert(rows);
+
   if (insErr) throw insErr;
 }
 
-// -----------------------------
-// DB -> AppData 로드
-// -----------------------------
+/* =========================
+   DB → AppData Load
+========================= */
+
 export async function loadDataFromDB(): Promise<AppData> {
   const userId = await requireUserId();
 
   const [productsRes, storesRes, invRes, spsRes] = await Promise.all([
-    supabase.from("products").select("id,name,category,active,make_enabled,created_at").eq("user_id", userId).order("created_at"),
-    supabase.from("stores").select("id,name,created_at").eq("user_id", userId).order("created_at"),
-    supabase.from("inventory").select("store_id,product_id,on_hand_qty,updated_at").eq("user_id", userId),
-    supabase.from("store_product_states").select("store_id,product_id,enabled").eq("user_id", userId),
+    supabase
+      .from("products")
+      .select("id,name,category,active,make_enabled,created_at")
+      .eq("user_id", userId)
+      .order("created_at"),
+    supabase
+      .from("stores")
+      .select("id,name,created_at")
+      .eq("user_id", userId)
+      .order("created_at"),
+    supabase
+      .from("inventory")
+      .select("store_id,product_id,on_hand_qty,updated_at")
+      .eq("user_id", userId),
+    supabase
+      .from("store_product_states")
+      .select("store_id,product_id,enabled")
+      .eq("user_id", userId),
   ]);
 
-  const err = productsRes.error || storesRes.error || invRes.error || spsRes.error;
+  const err =
+    productsRes.error ||
+    storesRes.error ||
+    invRes.error ||
+    spsRes.error;
   if (err) throw err;
 
   const products = (productsRes.data ?? []) as DBProduct[];
   const stores = (storesRes.data ?? []) as DBStore[];
   const inventory = (invRes.data ?? []) as DBInventory[];
 
-  // ✅ 추가: 혹시 DB에 store_product_states가 비어 있거나 조합이 누락된 경우 자동 seed
+  // seed 보장
   await ensureStoreProductStatesSeedDB({
     storeIds: stores.map((s) => s.id),
     productIds: products.map((p) => p.id),
   });
 
-  // seed 후 다시 sps 로드 (반영된 값까지 맞추기 위해)
   const { data: sps2, error: spsErr2 } = await supabase
     .from("store_product_states")
     .select("store_id,product_id,enabled")
@@ -125,7 +146,7 @@ export async function loadDataFromDB(): Promise<AppData> {
     products: products.map((p) => ({
       id: p.id,
       name: p.name,
-      category: p.category ?? "",
+      category: p.category,
       active: p.active ?? true,
       makeEnabled: p.make_enabled ?? true,
       createdAt: new Date(p.created_at).getTime(),
@@ -150,95 +171,62 @@ export async function loadDataFromDB(): Promise<AppData> {
   };
 }
 
-// -----------------------------
-// DB가 비어있는지 체크 (초기 마이그레이션 판단용)
-// -----------------------------
-export async function isDBEmpty(): Promise<boolean> {
+/* =========================
+   Category (분리 관리)
+========================= */
+
+// 목록 로드
+export async function loadCategoriesDB(): Promise<string[]> {
   const userId = await requireUserId();
 
-  const { count, error } = await supabase.from("products").select("*", { count: "exact", head: true }).eq("user_id", userId);
+  const { data, error } = await supabase
+    .from("categories")
+    .select("name")
+    .eq("user_id", userId)
+    .order("created_at");
 
   if (error) throw error;
-  return (count ?? 0) === 0;
+  return (data ?? []).map((r: any) => String(r.name));
 }
 
-// -----------------------------
-// LocalStorage(AppData) -> DB에 1회 업로드 (마이그레이션)
-// -----------------------------
-export async function migrateLocalToDBOnce(): Promise<void> {
+// 추가 (제품 추가 시 함께 호출)
+export async function upsertCategoryDB(name: string): Promise<void> {
   const userId = await requireUserId();
-  const local = loadLocalData();
+  const c = name.trim();
+  if (!c) return;
 
-  // products
-  if (local.products.length > 0) {
-    const { error } = await supabase.from("products").upsert(
-      local.products.map((p) => ({
-        user_id: userId,
-        id: p.id,
-        name: p.name,
-        category: p.category ?? "",
-        active: p.active ?? true,
-        created_at: new Date(p.createdAt).toISOString(),
-      })),
-      { onConflict: "user_id,id" }
-    );
-    if (error) throw error;
-  }
+  const { error } = await supabase
+    .from("categories")
+    .upsert({ user_id: userId, name: c }, { onConflict: "user_id,name" });
 
-  // stores
-  if (local.stores.length > 0) {
-    const { error } = await supabase.from("stores").upsert(
-      local.stores.map((s) => ({
-        user_id: userId,
-        id: s.id,
-        name: s.name,
-        created_at: new Date(s.createdAt).toISOString(),
-      })),
-      { onConflict: "user_id,id" }
-    );
-    if (error) throw error;
-  }
-
-  // inventory
-  if (local.inventory.length > 0) {
-    const { error } = await supabase.from("inventory").upsert(
-      local.inventory.map((i) => ({
-        user_id: userId,
-        store_id: i.storeId,
-        product_id: i.productId,
-        on_hand_qty: i.onHandQty,
-        updated_at: new Date(i.updatedAt).toISOString(),
-      })),
-      { onConflict: "user_id,store_id,product_id" }
-    );
-    if (error) throw error;
-  }
-
-  // store_product_states
-  if ((local.storeProductStates ?? []).length > 0) {
-    const { error } = await supabase.from("store_product_states").upsert(
-      (local.storeProductStates ?? []).map((x) => ({
-        user_id: userId,
-        store_id: x.storeId,
-        product_id: x.productId,
-        enabled: x.enabled,
-        updated_at: new Date().toISOString(),
-      })),
-      { onConflict: "user_id,store_id,product_id" }
-    );
-    if (error) throw error;
-  }
-
-  // ✅ 누락 조합 seed까지 보장
-  await ensureStoreProductStatesSeedDB({
-    storeIds: local.stores.map((s) => s.id),
-    productIds: local.products.map((p) => p.id),
-  });
+  if (error) throw error;
 }
 
-// -----------------------------
-// 재고 수량 upsert (핵심 쓰기)
-// -----------------------------
+// 삭제 (카테고리 자체 삭제 + 제품들은 null 처리)
+export async function deleteCategoryDB(name: string): Promise<void> {
+  const userId = await requireUserId();
+  const c = name.trim();
+  if (!c) return;
+
+  const { error: updErr } = await supabase
+    .from("products")
+    .update({ category: null })
+    .eq("user_id", userId)
+    .eq("category", c);
+  if (updErr) throw updErr;
+
+  const { error: delErr } = await supabase
+    .from("categories")
+    .delete()
+    .eq("user_id", userId)
+    .eq("name", c);
+  if (delErr) throw delErr;
+}
+
+/* =========================
+   Inventory / States
+========================= */
+
 export async function upsertInventoryItemDB(input: {
   storeId: string;
   productId: string;
@@ -260,9 +248,6 @@ export async function upsertInventoryItemDB(input: {
   if (error) throw error;
 }
 
-// -----------------------------
-// 입점처별 enabled upsert
-// -----------------------------
 export async function setStoreProductEnabledDB(input: {
   storeId: string;
   productId: string;
@@ -284,121 +269,108 @@ export async function setStoreProductEnabledDB(input: {
   if (error) throw error;
 }
 
-// -----------------------------
-// ✅ 제품 추가/수정 (DB) + seed
-// -----------------------------
-export async function createProductDB(p: Product): Promise<void> {
-    const userId = await requireUserId();
-  
-    // 1) upsert
-    const { error } = await supabase.from("products").upsert(
-      {
-        user_id: userId,
-        id: p.id,
-        name: p.name,
-        category: p.category ?? "",
-        active: p.active ?? true,
-        make_enabled: p.makeEnabled ?? true, // ✅ 추가
-        created_at: new Date(p.createdAt).toISOString(),
-      },
-      { onConflict: "user_id,id" }
-    );
-    if (error) throw error;
-  
-    // 2) seed: 모든 입점처에 대해 (storeId x 이 productId) 조합 보장
-    const { data: stores, error: stErr } = await supabase
-      .from("stores")
-      .select("id")
-      .eq("user_id", userId);
-    if (stErr) throw stErr;
-  
-    await ensureStoreProductStatesSeedDB({
-      storeIds: (stores ?? []).map((s: any) => s.id),
-      productIds: [p.id],
-    });
-  }
-  
-  // -----------------------------
-  // ✅ 입점처 추가/수정 (DB) + seed
-  // -----------------------------
-  export async function createStoreDB(s: Store): Promise<void> {
-    const userId = await requireUserId();
-  
-    // 1) upsert
-    const { error } = await supabase.from("stores").upsert(
-      {
-        user_id: userId,
-        id: s.id,
-        name: s.name,
-        created_at: new Date(s.createdAt).toISOString(),
-      },
-      { onConflict: "user_id,id" }
-    );
-    if (error) throw error;
-  
-    // 2) seed: 모든 제품에 대해 (이 storeId x productId) 조합 보장
-    const { data: products, error: pErr } = await supabase
-      .from("products")
-      .select("id")
-      .eq("user_id", userId);
-    if (pErr) throw pErr;
-  
-    await ensureStoreProductStatesSeedDB({
-      storeIds: [s.id],
-      productIds: (products ?? []).map((p: any) => p.id),
-    });
-  }
-  
-  // ✅ product delete
-  export async function deleteProductDB(productId: string): Promise<void> {
-    const userId = await requireUserId();
-  
-    const { error } = await supabase
-      .from("products")
-      .delete()
-      .eq("user_id", userId)
-      .eq("id", productId);
-  
-    if (error) throw error;
-  }
-  
-  // ✅ store delete
-  export async function deleteStoreDB(storeId: string): Promise<void> {
-    const userId = await requireUserId();
-  
-    const { error } = await supabase
-      .from("stores")
-      .delete()
-      .eq("user_id", userId)
-      .eq("id", storeId);
-  
-    if (error) throw error;
-  }
-// ✅ 특정 입점처의 여러 제품 enabled를 "한 번의 요청"으로 저장 (Bulk Upsert)
 export async function setStoreProductsEnabledBulkDB(input: {
-    storeId: string;
-    productIds: string[];
-    enabled: boolean;
-  }): Promise<void> {
-    const userId = await requireUserId();
-  
-    if (input.productIds.length === 0) return;
-  
-    const now = new Date().toISOString();
-  
-    const rows = input.productIds.map((productId) => ({
+  storeId: string;
+  productIds: string[];
+  enabled: boolean;
+}): Promise<void> {
+  const userId = await requireUserId();
+  if (input.productIds.length === 0) return;
+
+  const now = new Date().toISOString();
+
+  const rows = input.productIds.map((productId) => ({
+    user_id: userId,
+    store_id: input.storeId,
+    product_id: productId,
+    enabled: input.enabled,
+    updated_at: now,
+  }));
+
+  const { error } = await supabase
+    .from("store_product_states")
+    .upsert(rows, { onConflict: "user_id,store_id,product_id" });
+
+  if (error) throw error;
+}
+
+/* =========================
+   Product / Store CRUD
+========================= */
+
+export async function createProductDB(p: Product): Promise<void> {
+  const userId = await requireUserId();
+
+  const { error } = await supabase.from("products").upsert(
+    {
       user_id: userId,
-      store_id: input.storeId,
-      product_id: productId,
-      enabled: input.enabled,
-      updated_at: now,
-    }));
-  
-    // ✅ 배열 upsert = 네트워크 요청 1번
-    const { error } = await supabase
-      .from("store_product_states")
-      .upsert(rows, { onConflict: "user_id,store_id,product_id" });
-  
-    if (error) throw error;
-  }
-  
+      id: p.id,
+      name: p.name,
+      category: p.category,
+      active: p.active ?? true,
+      make_enabled: p.makeEnabled ?? true,
+      created_at: new Date(p.createdAt).toISOString(),
+    },
+    { onConflict: "user_id,id" }
+  );
+  if (error) throw error;
+
+  const { data: stores } = await supabase
+    .from("stores")
+    .select("id")
+    .eq("user_id", userId);
+
+  await ensureStoreProductStatesSeedDB({
+    storeIds: (stores ?? []).map((s: any) => s.id),
+    productIds: [p.id],
+  });
+}
+
+export async function createStoreDB(s: Store): Promise<void> {
+  const userId = await requireUserId();
+
+  const { error } = await supabase.from("stores").upsert(
+    {
+      user_id: userId,
+      id: s.id,
+      name: s.name,
+      created_at: new Date(s.createdAt).toISOString(),
+    },
+    { onConflict: "user_id,id" }
+  );
+  if (error) throw error;
+
+  const { data: products } = await supabase
+    .from("products")
+    .select("id")
+    .eq("user_id", userId);
+
+  await ensureStoreProductStatesSeedDB({
+    storeIds: [s.id],
+    productIds: (products ?? []).map((p: any) => p.id),
+  });
+}
+
+export async function deleteProductDB(productId: string): Promise<void> {
+  const userId = await requireUserId();
+
+  const { error } = await supabase
+    .from("products")
+    .delete()
+    .eq("user_id", userId)
+    .eq("id", productId);
+
+  if (error) throw error;
+}
+
+export async function deleteStoreDB(storeId: string): Promise<void> {
+  const userId = await requireUserId();
+
+  const { error } = await supabase
+    .from("stores")
+    .delete()
+    .eq("user_id", userId)
+    .eq("id", storeId);
+
+  if (error) throw error;
+}

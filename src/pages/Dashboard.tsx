@@ -5,8 +5,6 @@ import { supabase, getOrCreateMyProfile } from "../lib/supabaseClient";
 
 import {
   loadDataFromDB,
-  isDBEmpty,
-  migrateLocalToDBOnce,
   upsertInventoryItemDB,
   ensureStoreProductStatesSeedDB,
 } from "../data/store.supabase";
@@ -48,70 +46,122 @@ export default function Dashboard() {
   // ✅ 화면 상태
   const [selectedStoreId, setSelectedStoreId] = useState<string>("");
   const [dashView, setDashView] = useState<DashView>(DASH.inventory);
+  // ✅ refresh 중복 호출 방지(동시에 여러 refresh가 돌지 않게)
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const refreshQueuedRef = useRef(false);
 
-  // -----------------------------
-  // 1) DB에서 최신 데이터 로드 함수
-  // -----------------------------
-  const refreshFromDB = useCallback(async () => {
-    // 1) DB 데이터 로드
-    const dbData = await loadDataFromDB();
-  
-    // 2) store × product 조합 seed (없으면 생성)
-    await ensureStoreProductStatesSeedDB({
-      storeIds: dbData.stores.map((s) => s.id),
-      productIds: dbData.products.map((p) => p.id),
-    });
-  
-    // 3) seed 반영된 데이터 다시 로드
-    const dbData2 = await loadDataFromDB();
-    setData(dbData2);
-  
-    // 4) 선택 입점처 기본값 설정
-    if (dbData2.stores.length > 0) {
-      setSelectedStoreId((prev) => prev || dbData2.stores[0].id);
-    }
-  }, []);
-  
-  // -----------------------------
-  // 2) 최초 진입 시: DB 비었으면 마이그레이션 + 로드
-  // -----------------------------
-  useEffect(() => {
-    let alive = true;
-  
-    (async () => {
-      console.log("[DB] start");
-      try {
-        setLoading(true);
-        setErrorMsg(null);
-  
-        console.log("[DB] check empty...");
-        const empty = await isDBEmpty();
-        console.log("[DB] empty =", empty);
-  
-        if (empty) {
-          console.log("[DB] migrate start...");
-          await migrateLocalToDBOnce();
-          console.log("[DB] migrate done");
-        }
-  
-        console.log("[DB] refreshFromDB start...");
-        await refreshFromDB();
-        console.log("[DB] refreshFromDB done");
-  
-        if (!alive) return;
-      } catch (e: any) {
-        console.error("[DB] error", e);
-        if (!alive) return;
-        setErrorMsg(e?.message ?? String(e));
-      } finally {
-        if (alive) setLoading(false);
+// -----------------------------
+// 1) DB에서 최신 데이터 로드 함수 (최적화 버전)
+// - 기본: 1회 로드
+// - store_product_states 누락 조합이 있을 때만 seed
+// - seed 했을 때만 2차 로드
+// - 동시에 여러 refresh가 돌면 1개로 합치고, 필요 시 1번 더 실행
+// -----------------------------
+const refreshFromDB = useCallback(async () => {
+  // 이미 refresh가 돌고 있으면 "한 번 더"만 예약하고 끝
+  if (refreshInFlightRef.current) {
+    refreshQueuedRef.current = true;
+    return refreshInFlightRef.current;
+  }
+
+  const run = (async () => {
+    do {
+      refreshQueuedRef.current = false;
+
+      // 1) 한 번만 로드
+console.time("[PERF] loadDataFromDB #1");
+const dbData = await loadDataFromDB();
+console.timeEnd("[PERF] loadDataFromDB #1");
+
+const storeIds = dbData.stores.map((s) => s.id);
+const productIds = dbData.products.map((p) => p.id);
+
+// 2) store×product 조합 누락 여부 검사
+// (누락이 있을 때만 seed)
+let needSeed = false;
+if (storeIds.length > 0 && productIds.length > 0) {
+  const exist = new Set<string>();
+  for (const x of dbData.storeProductStates ?? []) {
+    exist.add(`${x.storeId}::${x.productId}`);
+  }
+
+  // 하나라도 없으면 seed 필요
+  outer: for (const sId of storeIds) {
+    for (const pId of productIds) {
+      if (!exist.has(`${sId}::${pId}`)) {
+        needSeed = true;
+        break outer;
       }
-    })();
+    }
+  }
+}
+
+if (needSeed) {
+  console.time("[PERF] ensureStoreProductStatesSeedDB");
+  await ensureStoreProductStatesSeedDB({ storeIds, productIds });
+  console.timeEnd("[PERF] ensureStoreProductStatesSeedDB");
+
+  // seed를 했으면 그 결과를 반영하기 위해 1회만 재로드
+  console.time("[PERF] loadDataFromDB #2");
+  const dbData2 = await loadDataFromDB();
+  console.timeEnd("[PERF] loadDataFromDB #2");
+
+  setData(dbData2);
+
+  if (dbData2.stores.length > 0) {
+    setSelectedStoreId((prev) => prev || dbData2.stores[0].id);
+  }
+} else {
+  // seed 불필요면 그대로 반영 (2차 로드 없음)
+  setData(dbData);
+
+  if (dbData.stores.length > 0) {
+    setSelectedStoreId((prev) => prev || dbData.stores[0].id);
+  }
+}
+
+      // refresh 도중 누군가 또 refresh를 요청했으면 1번 더 돌기
+    } while (refreshQueuedRef.current);
+  })();
+
+  refreshInFlightRef.current = run;
+
+  try {
+    await run;
+  } finally {
+    refreshInFlightRef.current = null;
+  }
+}, []);
   
-    return () => {
-      alive = false;
-    };
-  }, [refreshFromDB]);
+  // -----------------------------
+// 2) 최초 진입 시: DB에서 로드
+// -----------------------------
+useEffect(() => {
+  let alive = true;
+
+  (async () => {
+    console.log("[DB] start");
+    try {
+      setLoading(true);
+      setErrorMsg(null);
+
+      await refreshFromDB();
+
+      if (!alive) return;
+      console.log("[DB] refreshFromDB done");
+    } catch (e: any) {
+      console.error("[DB] error", e);
+      if (!alive) return;
+      setErrorMsg(e?.message ?? String(e));
+    } finally {
+      if (alive) setLoading(false);
+    }
+  })();
+
+  return () => {
+    alive = false;
+  };
+}, [refreshFromDB]);
   
   useEffect(() => {
     let alive = true;
@@ -495,39 +545,30 @@ const exportProductionCSV = useCallback(() => {
   restockTo,
 ]);
 
-  // -----------------------------
-  // 5) 화면 렌더
-  // -----------------------------
-  if (loading) {
-    return (
-      <div style={{ padding: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Shop Planner</div>
-        DB에서 데이터를 불러오는 중...
-      </div>
-    );
-  }
-
-  if (errorMsg) {
-    return (
-      <div style={{ padding: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Shop Planner</div>
-        <h2 style={{ marginTop: 0 }}>DB 로드 실패</h2>
-        <div style={{ padding: 12, background: "#f3f4f6", borderRadius: 8 }}>{errorMsg}</div>
-        <button
-          style={{ marginTop: 12 }}
-          onClick={() => {
-            setErrorMsg(null);
-            setLoading(true);
-            refreshFromDB()
-              .catch((e) => setErrorMsg(e?.message ?? String(e)))
-              .finally(() => setLoading(false));
-          }}
-        >
-          다시 시도
-        </button>
-      </div>
-    );
-  }
+// -----------------------------
+// 5) 화면 렌더
+// -----------------------------
+if (errorMsg) {
+  return (
+    <div style={{ padding: 16 }}>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>Shop Planner</div>
+      <h2 style={{ marginTop: 0 }}>DB 로드 실패</h2>
+      <div style={{ padding: 12, background: "#f3f4f6", borderRadius: 8 }}>{errorMsg}</div>
+      <button
+        style={{ marginTop: 12 }}
+        onClick={() => {
+          setErrorMsg(null);
+          setLoading(true);
+          refreshFromDB()
+            .catch((e) => setErrorMsg(e?.message ?? String(e)))
+            .finally(() => setLoading(false));
+        }}
+      >
+        다시 시도
+      </button>
+    </div>
+  );
+}
 
   // ✅ 대시보드 페이지
   return (
@@ -535,41 +576,59 @@ const exportProductionCSV = useCallback(() => {
     <div className="pageContainer">
       <h2 className="pageTitle">대시보드</h2>
 
+      {loading && (
+  <div style={{ fontSize: 12, color: "#666", margin: "6px 0 10px" }}>
+    동기화 중…
+  </div>
+)}
+
       <div className="summaryRow">
         <Card title="입점처" value={`${stores.length}`} />
         <Card title="활성 제품" value={`${products.length}`} />
         <Card title="선택 입점처 총 재고" value={`${totalOnHand}`} />
         </div>
 
-      {/* 화면 전환 버튼 */}
-      <div className="viewSwitch">
-        <button
-          type="button"
-          className={`viewBtn ${dashView === DASH.inventory ? "viewBtnActive" : ""}`}
-          onClick={() => setDashView(DASH.inventory)}
-        >
-          재고 현황
-        </button>
+        <div className="viewSwitch">
+  <button
+    type="button"
+    className={`viewBtn ${dashView === DASH.inventory ? "viewBtnActive" : ""}`}
+    onClick={() => setDashView(DASH.inventory)}
+    disabled={loading}
+    style={{
+      opacity: loading ? 0.5 : 1,
+      cursor: loading ? "not-allowed" : "pointer",
+    }}
+    title={loading ? "동기화 중…" : undefined}
+  >
+    재고 현황
+  </button>
 
-        <button
-          type="button"
-          className={`viewBtn ${dashView === DASH.todo ? "viewBtnActive" : ""}`}
-          onClick={() => setDashView(DASH.todo)}
-        >
-          제작 리스트
-        </button>
-      </div>
+  <button
+    type="button"
+    className={`viewBtn ${dashView === DASH.todo ? "viewBtnActive" : ""}`}
+    onClick={() => setDashView(DASH.todo)}
+    disabled={loading}
+    style={{
+      opacity: loading ? 0.5 : 1,
+      cursor: loading ? "not-allowed" : "pointer",
+    }}
+    title={loading ? "동기화 중…" : undefined}
+  >
+    제작 리스트
+  </button>
+</div>
+
 
       {/* 📥 데이터 다운로드 ← 여기 */}
       <div style={{ display: "flex", justifyContent: "flex-end", margin: "8px 0 16px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <span style={{ fontSize: 13, color: "#666" }}>데이터 다운로드</span>
 
-       <button onClick={exportInventoryCSV} className="viewBtn">
+       <button onClick={exportInventoryCSV} className="viewBtn" disabled={loading}>
       재고 현황
        </button>
 
-       <button onClick={exportProductionCSV} className="viewBtn">
+       <button onClick={exportProductionCSV} className="viewBtn" disabled={loading}>
       제작 리스트
        </button>
        </div>
@@ -635,6 +694,7 @@ const exportProductionCSV = useCallback(() => {
   className="qtyInput"
   type="number"
   inputMode="numeric"
+  disabled={loading}
   value={onHand === 0 ? "" : onHand}
   placeholder="0"
   onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
