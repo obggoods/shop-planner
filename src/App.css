@@ -18,6 +18,10 @@ html {
   width: 100%;
   display: flex;
   justify-content: center;
+
+  /* ✅ 추가 */
+  background: var(--bg);
+  min-height: 100vh;
 }
 
 .pageContainer {
@@ -87,19 +91,21 @@ html {
 .sheetTabActive {
   background: #ffffff;
   border-color: #cbd5e1;
-  transform: translateY(-2px);
-  box-shadow: 0 -6px 18px rgba(17, 24, 39, 0.10);
+  transform: translateY(-1px); /* 살짝만 */
+  box-shadow: none;            /* ✅ 그림자 제거 */
   z-index: 2;
 }
 
+
 /* (옵션) 탭 아래 패널 스타일 - 현재 코드에서 쓰면 유지 */
 .sheetPanel {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px;
-  background: #ffffff;
+  background: var(--card);
   box-shadow: 0 10px 24px rgba(17, 24, 39, 0.06);
 }
+
 
 .sheetPanelHeader {
   display: flex;
@@ -149,11 +155,12 @@ html {
 
 .summaryCard {
   padding: 10px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: #ffffff;
+  background: var(--card);
   text-align: left;
 }
+
 
 .summaryCardTitle {
   font-size: 12px;
@@ -216,10 +223,10 @@ html {
 /* panels */
 .panel {
   margin-top: 16px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px;
-  background: #ffffff;
+  background: var(--card);
   box-shadow: 0 10px 24px rgba(17, 24, 39, 0.06);
   text-align: left;
   width: 100%;
@@ -373,10 +380,11 @@ html {
 }
 
 .masterCard {
-  border: 1px solid #ddd;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
-  min-width: 280px;
+  background: var(--card);
+  box-sizing: border-box;
 }
 
 .masterProducts {
@@ -391,4 +399,15 @@ html {
   .masterTwoCol {
     grid-template-columns: 1fr !important;
   }
+}
+
+/* 버튼 포커스 기본 outline 제거 */
+button:focus {
+  outline: none;
+}
+
+/* 키보드 접근성은 유지 (Tab으로 이동할 때만 표시) */
+button:focus-visible {
+  outline: none;
+  box-shadow: none;
 }

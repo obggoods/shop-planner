@@ -1,95 +1,312 @@
-import { useEffect, useState } from "react";
+// src/App.tsx
+import { useEffect, useMemo, useState } from "react";
+import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import type { Session } from "@supabase/supabase-js";
+
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Master from "./pages/Master";
-import { supabase } from "./lib/supabaseClient";
+import Terms from "./pages/Terms";
+import Privacy from "./pages/Privacy";
+import Pricing from "./pages/Pricing";
+import InviteGate from "./pages/InviteGate";
+import AdminInvites from "./pages/AdminInvites";
 
-import type { Session } from "@supabase/supabase-js";
+import { supabase, getOrCreateMyProfile } from "./lib/supabaseClient";
+
+type MyProfile = {
+  is_invited?: boolean;
+};
 
 export default function App() {
+  const nav = useNavigate();
+  const location = useLocation();
+
   const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [bootLoading, setBootLoading] = useState(true);
 
-  // ✅ 추가: 페이지 탭 상태
-  const [page, setPage] = useState<"dashboard" | "master">("dashboard");
+  // 초대 여부 확인용
+  const [profile, setProfile] = useState<MyProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
 
+  // 관리자 여부(InviteGate 우회용)
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminChecked, setAdminChecked] = useState(false);
+
+  // ✅ 공개 페이지(약관/개인정보/가격) 여부
+  const isPublicLegalPage = useMemo(() => {
+    const p = location.pathname;
+    return p === "/terms" || p === "/privacy" || p === "/pricing";
+  }, [location.pathname]);
+
+  const hideHeaderOnPublicPages = true;
+  const showHeader = !!session && !(hideHeaderOnPublicPages && isPublicLegalPage);
+
+  // ✅ 0) 세션 부트스트랩 + Auth 상태 변화 구독
   useEffect(() => {
+    let alive = true;
+
     supabase.auth.getSession().then(({ data }) => {
+      if (!alive) return;
       setSession(data.session);
-      setLoading(false);
+      setBootLoading(false);
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
-      // 로그인/로그아웃 후 기본 화면은 대시보드로
-      setPage("dashboard");
+      // 세션이 바뀌면 관련 상태 초기화
+      setProfile(null);
+      setIsAdmin(false);
+      setAdminChecked(false);
     });
 
     return () => {
+      alive = false;
       sub.subscription.unsubscribe();
     };
   }, []);
 
-  const onLogout = async () => {
-    await supabase.auth.signOut();
-  };
+  // ✅ 1) 로그인 상태에서만 프로필 로드 (초대 여부)
+  useEffect(() => {
+    let alive = true;
 
-  if (loading) {
+    (async () => {
+      if (!session) return;
+
+      try {
+        setProfileLoading(true);
+        const p = await getOrCreateMyProfile();
+        if (!alive) return;
+        setProfile(p as MyProfile);
+      } catch (e) {
+        console.error("[App] profile load failed", e);
+        if (!alive) return;
+        // 초대 흐름에서는 실패 시 막는게 안전
+        setProfile({ is_invited: false });
+      } finally {
+        if (alive) setProfileLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [session]);
+
+  // ✅ 2) 로그인 상태에서만 관리자 여부 체크 (InviteGate 우회)
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      // 세션 없으면 체크 불필요
+      if (!session) {
+        if (!cancelled) {
+          setIsAdmin(false);
+          setAdminChecked(true);
+        }
+        return;
+      }
+
+      const { data, error } = await supabase.rpc("is_admin");
+      if (cancelled) return;
+
+      setIsAdmin(!error && !!data);
+      setAdminChecked(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  // ✅ 부팅 로딩
+  if (bootLoading) {
     return <div style={{ padding: 16 }}>로딩 중...</div>;
   }
 
-  if (!session) {
-    return <Login />;
+  // ✅ 1) 공개 페이지는 무조건 통과 (Paddle 심사용)
+  if (isPublicLegalPage) {
+    return (
+      <div>
+        <Routes>
+          <Route path="/terms" element={<Terms />} />
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/pricing" element={<Pricing />} />
+          <Route path="*" element={<Navigate to="/terms" replace />} />
+        </Routes>
+      </div>
+    );
   }
 
+  // ✅ 2) 로그인 안 했으면 로그인으로
+  if (!session) {
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
+  }
+
+  // ✅ 3) 로그인 했으면 프로필/관리자 확인이 끝날 때까지 대기
+  if (profileLoading || !profile || !adminChecked) {
+    return (
+      <div>
+        {showHeader && <Header sessionEmail={session.user.email ?? ""} onHome={() => nav("/")} />}
+        <div style={{ padding: 16 }}>초대 여부 확인 중…</div>
+      </div>
+    );
+  }
+
+  // ✅ 4) 관리자면 초대 없이 통과, 일반 유저는 초대 필요
+  if (!isAdmin && profile.is_invited !== true) {
+    return <InviteGate />;
+  }
+
+  // ✅ 5) 초대(또는 관리자) 통과 → 앱 화면
   return (
     <div>
-      {/* 상단바 */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: 12,
-          borderBottom: "1px solid #e5e7eb",
-        }}
-      >
-        <div style={{ fontWeight: 700 }}>스톡앤메이크</div>
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <div style={{ opacity: 0.7, fontSize: 13 }}>{session.user.email}</div>
-          <button onClick={onLogout}>로그아웃</button>
+      {showHeader && (
+        <Header
+          sessionEmail={session.user.email ?? ""}
+          onHome={() => nav("/")}
+          onLogout={async () => {
+            await supabase.auth.signOut();
+            nav("/");
+          }}
+        />
+      )}
+
+      <div style={{ paddingBottom: showHeader ? 12 : 0, maxWidth: 860, margin: "0 auto" }}>
+        {showHeader && <div style={{ padding: "0 16px" }}><TopTabs /></div>}
+      </div>
+
+      <Routes>
+        <Route path="/login" element={<Login />} />
+
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/master" element={<Master />} />
+        <Route path="/admin/invites" element={<AdminInvites />} />
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </div>
+  );
+}
+
+function Header({
+  sessionEmail,
+  onHome,
+  onLogout,
+}: {
+  sessionEmail: string;
+  onHome: () => void;
+  onLogout?: () => Promise<void>;
+}) {
+  const nav = useNavigate();
+
+  return (
+    <div style={{ background: "white", borderBottom: "1px solid rgba(0,0,0,0.08)" }}>
+      <div style={{ maxWidth: 860, margin: "0 auto", padding: "0 16px" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "14px 0",
+            gap: 12,
+          }}
+        >
+          <div style={{ fontWeight: 900, fontSize: 18, cursor: "pointer" }} onClick={onHome}>
+            스톡앤메이크
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div
+              style={{
+                fontSize: 13,
+                padding: "6px 10px",
+                border: "1px solid rgba(0,0,0,0.12)",
+                borderRadius: 10,
+              }}
+            >
+              {sessionEmail}
+            </div>
+
+            {onLogout && (
+              <button
+                onClick={async () => {
+                  await onLogout();
+                  nav("/");
+                }}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(0,0,0,0.12)",
+                  background: "white",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                로그아웃
+              </button>
+            )}
+          </div>
         </div>
       </div>
-
-      {/* ✅ 추가: 네비 탭 */}
-      <div style={{ display: "flex", gap: 8, padding: 12 }}>
-        <button
-          type="button"
-          onClick={() => setPage("dashboard")}
-          style={{
-            fontWeight: page === "dashboard" ? 800 : 400,
-            borderBottom: page === "dashboard" ? "2px solid #111827" : "2px solid transparent",
-            paddingBottom: 6,
-          }}
-        >
-          대시보드
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setPage("master")}
-          style={{
-            fontWeight: page === "master" ? 800 : 400,
-            borderBottom: page === "master" ? "2px solid #111827" : "2px solid transparent",
-            paddingBottom: 6,
-          }}
-        >
-          마스터
-        </button>
-      </div>
-
-      {/* ✅ 화면 전환 */}
-      {page === "dashboard" ? <Dashboard /> : <Master />}
     </div>
+  );
+}
+
+function TopTabs() {
+  const nav = useNavigate();
+  const location = useLocation();
+
+  const isDash = location.pathname === "/";
+  const isMaster = location.pathname.startsWith("/master");
+  const isAdminInvites = location.pathname.startsWith("/admin/invites");
+
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <TabButton active={isDash} onClick={() => nav("/")}>
+        대시보드
+      </TabButton>
+
+      <TabButton active={isMaster} onClick={() => nav("/master")}>
+        마스터
+      </TabButton>
+
+      {/* 관리자 버튼은 보여도 안전함(서버에서 is_admin으로 막음). 원하면 isAdmin 조건부로도 가능 */}
+      <TabButton active={isAdminInvites} onClick={() => nav("/admin/invites")}>
+        관리자
+      </TabButton>
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "8px 12px",
+        borderRadius: 10,
+        border: "1px solid rgba(0,0,0,0.12)",
+        background: active ? "#111827" : "white",
+        color: active ? "white" : "#111827",
+        fontWeight: 900,
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
   );
 }
