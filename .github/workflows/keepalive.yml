@@ -11,4 +11,4 @@ jobs:
     steps:
       - name: Ping public page
         run: |
-          curl -sS -o /dev/null -w "%{http_code}\n" https://YOUR-VERCEL-DOMAIN/pricing
+          curl -sS -o /dev/null -w "%{http_code}\n" https://shop-planner.vercel.app/pricing
