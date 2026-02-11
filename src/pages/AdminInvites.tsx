@@ -19,6 +19,9 @@ export default function AdminInvites() {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [showUsed, setShowUsed] = useState<boolean>(true); // 사용된 코드도 보여줄지
   const [filterMode, setFilterMode] = useState<"all" | "unused">("all"); // 필터 모드
+  const [betaInvitedCount, setBetaInvitedCount] = useState<number>(0);
+  const [betaLimit, setBetaLimit] = useState<number>(30);
+  const [betaRemaining, setBetaRemaining] = useState<number>(30);
 
   const unusedCount = useMemo(
     () => rows.filter((r) => !r.is_used).length,
@@ -131,6 +134,19 @@ export default function AdminInvites() {
     }
   }  
 
+  async function loadBetaStats() {
+    const { data, error } = await supabase.rpc("beta_stats");
+    if (error) return;
+  
+    // data는 table return이라 보통 배열로 옴
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) return;
+  
+    setBetaInvitedCount(row.invited_count ?? 0);
+    setBetaLimit(row.beta_limit ?? 30);
+    setBetaRemaining(row.remaining ?? 0);
+  }
+
   useEffect(() => {
     (async () => {
       await checkAdmin();
@@ -138,7 +154,10 @@ export default function AdminInvites() {
   }, []);
 
   useEffect(() => {
-    if (isAdmin) loadInvites();
+    if (isAdmin) {
+      loadInvites();
+      loadBetaStats();
+    }
   }, [isAdmin]);
 
   if (isAdmin === null) return <div style={{ padding: 16 }}>관리자 권한 확인 중…</div>;
@@ -231,8 +250,10 @@ export default function AdminInvites() {
         </div>
 
         <div style={{ marginLeft: "auto" }}>
-  <b>미사용:</b> {unusedCount} / <b>전체:</b> {rows.length} / <b>표시중:</b> {visibleRows.length}
-    </div>
+  <b>베타:</b> {betaInvitedCount}/{betaLimit} (남은 {betaRemaining}){" "}
+  · <b>미사용:</b> {unusedCount} / <b>전체:</b> {rows.length} / <b>표시중:</b> {visibleRows.length}
+</div>
+
     </div>
 
       {issuedCodes.length > 0 && (
