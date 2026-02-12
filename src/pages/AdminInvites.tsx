@@ -85,7 +85,7 @@ export default function AdminInvites() {
       return;
     }
 
-    const codes = (data ?? []).map((x: any) => x.code).filter(Boolean);
+    const codes = (data ?? []).map((x: any) => x.out_code).filter(Boolean);
     setIssuedCodes(codes);
     await loadInvites();
   }
