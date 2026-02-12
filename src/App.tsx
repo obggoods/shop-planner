@@ -168,7 +168,7 @@ export default function App() {
 
   // ✅ 5) 초대(또는 관리자) 통과 → 앱 화면
   return (
-    <div>
+    <div style={{ color: "#111827" }}>
       {showHeader && (
         <Header
           sessionEmail={session.user.email ?? ""}
