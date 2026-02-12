@@ -1,8 +1,27 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { FormEvent } from "react";
 import { supabase } from "../lib/supabaseClient";
 
 export default function Login() {
+  const nav = useNavigate();
+
+useEffect(() => {
+  const check = async () => {
+    const { data } = await supabase.auth.getSession();
+    if (data.session) nav("/", { replace: true });
+  };
+  check();
+
+  const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    if (session) nav("/", { replace: true });
+  });
+
+  return () => {
+    sub.subscription.unsubscribe();
+  };
+}, [nav]);
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"login" | "signup">("login");
