@@ -1,5 +1,5 @@
 // src/App.tsx
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 
@@ -127,14 +127,12 @@ export default function App() {
   // ✅ 1) 공개 페이지는 무조건 통과 (Paddle 심사용)
   if (isPublicLegalPage) {
     return (
-      <div>
-        <Routes>
-          <Route path="/terms" element={<Terms />} />
-          <Route path="/privacy" element={<Privacy />} />
-          <Route path="/pricing" element={<Pricing />} />
-          <Route path="*" element={<Navigate to="/terms" replace />} />
-        </Routes>
-      </div>
+      <Routes>
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/pricing" element={<Pricing />} />
+        <Route path="*" element={<Navigate to="/terms" replace />} />
+      </Routes>
     );
   }
 
@@ -152,7 +150,12 @@ export default function App() {
   if (profileLoading || !profile || !adminChecked) {
     return (
       <div>
-        {showHeader && <Header sessionEmail={session.user.email ?? ""} onHome={() => nav("/")} />}
+        {showHeader && (
+          <Header
+            sessionEmail={session.user.email ?? ""}
+            onHome={() => nav("/")}
+          />
+        )}
         <div style={{ padding: 16 }}>초대 여부 확인 중…</div>
       </div>
     );
@@ -177,15 +180,21 @@ export default function App() {
         />
       )}
 
-      <div style={{ paddingBottom: showHeader ? 12 : 0, maxWidth: 860, margin: "0 auto" }}>
-        {showHeader && <div style={{ padding: "0 16px" }}><TopTabs /></div>}
-      </div>
+      {showHeader && (
+        <div style={{ paddingBottom: 12, maxWidth: 860, margin: "0 auto" }}>
+          <div style={{ padding: "0 16px" }}>
+            <TopTabs isAdmin={isAdmin} />
+          </div>
+        </div>
+      )}
 
       <Routes>
         <Route path="/login" element={<Login />} />
 
         <Route path="/" element={<Dashboard />} />
         <Route path="/master" element={<Master />} />
+
+        {/* 관리자만 탭이 보이지만, 라우트 접근은 AdminInvites 내부에서도 한 번 더 막는게 안전 */}
         <Route path="/admin/invites" element={<AdminInvites />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
@@ -203,8 +212,6 @@ function Header({
   onHome: () => void;
   onLogout?: () => Promise<void>;
 }) {
-  const nav = useNavigate();
-
   return (
     <div style={{ background: "white", borderBottom: "1px solid rgba(0,0,0,0.08)" }}>
       <div style={{ maxWidth: 860, margin: "0 auto", padding: "0 16px" }}>
@@ -237,7 +244,6 @@ function Header({
               <button
                 onClick={async () => {
                   await onLogout();
-                  nav("/");
                 }}
                 style={{
                   padding: "8px 12px",
@@ -258,7 +264,7 @@ function Header({
   );
 }
 
-function TopTabs() {
+function TopTabs({ isAdmin }: { isAdmin: boolean }) {
   const nav = useNavigate();
   const location = useLocation();
 
@@ -276,10 +282,12 @@ function TopTabs() {
         마스터
       </TabButton>
 
-      {/* 관리자 버튼은 보여도 안전함(서버에서 is_admin으로 막음). 원하면 isAdmin 조건부로도 가능 */}
-      <TabButton active={isAdminInvites} onClick={() => nav("/admin/invites")}>
-        관리자
-      </TabButton>
+      {/* ✅ 관리자만 탭 노출 */}
+      {isAdmin && (
+        <TabButton active={isAdminInvites} onClick={() => nav("/admin/invites")}>
+          관리자
+        </TabButton>
+      )}
     </div>
   );
 }
@@ -296,6 +304,7 @@ function TabButton({
   return (
     <button
       onClick={onClick}
+      type="button"
       style={{
         padding: "8px 12px",
         borderRadius: 10,
