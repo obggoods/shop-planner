@@ -315,4 +315,35 @@
   .auth-footer .link-btn:disabled {
     display: inline-block;
   }
+  .forgot-panel {
+    border: 1px solid #e5e7eb;
+    background: #fafafa;
+    border-radius: 12px;
+    padding: 12px;
+    display: grid;
+    gap: 10px;
+  }
+  
+  .forgot-actions {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    align-items: center;
+  }
+  
+  .ghost-btn {
+    appearance: none;
+    border: 1px solid #d1d5db;
+    background: #fff;
+    color: #111827;
+    border-radius: 12px;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  
+  .ghost-btn:hover {
+    background: #f3f4f6;
+  }
   
