@@ -3,6 +3,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 
+import "./App.css";
+
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Master from "./pages/Master";
@@ -12,7 +14,6 @@ import Pricing from "./pages/Pricing";
 import InviteGate from "./pages/InviteGate";
 import AdminInvites from "./pages/AdminInvites";
 import ResetPassword from "./pages/ResetPassword";
-
 
 import { supabase, getOrCreateMyProfile } from "./lib/supabaseClient";
 
@@ -27,22 +28,23 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [bootLoading, setBootLoading] = useState(true);
 
-  // 초대 여부 확인용
   const [profile, setProfile] = useState<MyProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
 
-  // 관리자 여부(InviteGate 우회용)
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminChecked, setAdminChecked] = useState(false);
 
-  // ✅ 공개 페이지(약관/개인정보/가격) 여부
+  // ✅ 공개 페이지(약관/개인정보/가격)
   const isPublicLegalPage = useMemo(() => {
     const p = location.pathname;
     return p === "/terms" || p === "/privacy" || p === "/pricing";
   }, [location.pathname]);
 
-  const hideHeaderOnPublicPages = true;
-  const showHeader = !!session && !(hideHeaderOnPublicPages && isPublicLegalPage);
+  // ✅ 인증 페이지(헤더/탭 없이)
+  const isAuthPage = useMemo(() => {
+    const p = location.pathname;
+    return p === "/login" || p === "/reset-password";
+  }, [location.pathname]);
 
   // ✅ 0) 세션 부트스트랩 + Auth 상태 변화 구독
   useEffect(() => {
@@ -56,7 +58,6 @@ export default function App() {
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
-      // 세션이 바뀌면 관련 상태 초기화
       setProfile(null);
       setIsAdmin(false);
       setAdminChecked(false);
@@ -83,7 +84,6 @@ export default function App() {
       } catch (e) {
         console.error("[App] profile load failed", e);
         if (!alive) return;
-        // 초대 흐름에서는 실패 시 막는게 안전
         setProfile({ is_invited: false });
       } finally {
         if (alive) setProfileLoading(false);
@@ -95,12 +95,11 @@ export default function App() {
     };
   }, [session]);
 
-  // ✅ 2) 로그인 상태에서만 관리자 여부 체크 (InviteGate 우회)
+  // ✅ 2) 로그인 상태에서만 관리자 여부 체크
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      // 세션 없으면 체크 불필요
       if (!session) {
         if (!cancelled) {
           setIsAdmin(false);
@@ -121,10 +120,7 @@ export default function App() {
     };
   }, [session]);
 
-  // ✅ 부팅 로딩
-  if (bootLoading) {
-    return <div style={{ padding: 16 }}>로딩 중...</div>;
-  }
+  if (bootLoading) return <div className="app-loading">로딩 중...</div>;
 
   // ✅ 1) 공개 페이지는 무조건 통과 (Paddle 심사용)
   if (isPublicLegalPage) {
@@ -138,69 +134,68 @@ export default function App() {
     );
   }
 
-  // ✅ 2) 로그인 안 했으면 로그인으로
+  // ✅ 2) Auth 페이지(/login, /reset-password)는 헤더/탭 없이
+  if (isAuthPage) {
+    return (
+      <Routes>
+        <Route path="/login" element={session ? <Navigate to="/" replace /> : <Login />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="*" element={<Navigate to={session ? "/" : "/login"} replace />} />
+      </Routes>
+    );
+  }
+
+  // ✅ 3) 로그인 안 했으면 로그인으로
   if (!session) {
     return (
       <Routes>
-        <Route path="/login" element={<Login />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     );
   }
 
-  // ✅ 3) 로그인 했으면 프로필/관리자 확인이 끝날 때까지 대기
+  // ✅ 4) 로그인 했으면 프로필/관리자 확인이 끝날 때까지 대기
   if (profileLoading || !profile || !adminChecked) {
     return (
-      <div>
-        {showHeader && (
-          <Header
-            sessionEmail={session.user.email ?? ""}
-            onHome={() => nav("/")}
-          />
-        )}
-        <div style={{ padding: 16 }}>초대 여부 확인 중…</div>
+      <div className="app-container">
+        <Header sessionEmail={session.user.email ?? ""} onHome={() => nav("/")} />
+        <div className="app-loading">초대 여부 확인 중…</div>
       </div>
     );
   }
 
-  // ✅ 4) 관리자면 초대 없이 통과, 일반 유저는 초대 필요
+  // ✅ 5) 관리자면 초대 없이 통과, 일반 유저는 초대 필요
   if (!isAdmin && profile.is_invited !== true) {
     return <InviteGate />;
   }
 
-  // ✅ 5) 초대(또는 관리자) 통과 → 앱 화면
+  // ✅ 6) 초대(또는 관리자) 통과 → 앱 화면
   return (
-    <div style={{ color: "#111827" }}>
-      {showHeader && (
-        <Header
-          sessionEmail={session.user.email ?? ""}
-          onHome={() => nav("/")}
-          onLogout={async () => {
-            await supabase.auth.signOut();
-            nav("/");
-          }}
-        />
-      )}
+    <div className="app-container">
+      <Header
+        sessionEmail={session.user.email ?? ""}
+        onHome={() => nav("/")}
+        onLogout={async () => {
+          await supabase.auth.signOut();
+          nav("/login");
+        }}
+      />
 
-      {showHeader && (
-        <div style={{ paddingBottom: 12, maxWidth: 860, margin: "0 auto" }}>
-          <div style={{ padding: "0 16px" }}>
-            <TopTabs isAdmin={isAdmin} />
-          </div>
-        </div>
-      )}
+      <div className="app-tabs-wrapper">
+        <TopTabs isAdmin={isAdmin} />
+      </div>
 
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/master" element={<Master />} />
-
-        {/* 관리자만 탭이 보이지만, 라우트 접근은 AdminInvites 내부에서도 한 번 더 막는게 안전 */}
-        <Route path="/admin/invites" element={<AdminInvites />} />
-
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <div className="app-content">
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/master" element={<Master />} />
+          <Route
+            path="/admin/invites"
+            element={isAdmin ? <AdminInvites /> : <Navigate to="/" replace />}
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </div>
     </div>
   );
 }
@@ -215,46 +210,23 @@ function Header({
   onLogout?: () => Promise<void>;
 }) {
   return (
-    <div style={{ background: "white", borderBottom: "1px solid rgba(0,0,0,0.08)" }}>
-      <div style={{ maxWidth: 860, margin: "0 auto", padding: "0 16px" }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "14px 0",
-            gap: 12,
-          }}
-        >
-          <div style={{ fontWeight: 900, fontSize: 18, cursor: "pointer" }} onClick={onHome}>
+    <div className="app-header">
+      <div className="app-header-inner">
+        <div className="app-header-row">
+          <div className="app-brand" onClick={onHome}>
             스톡앤메이크
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div
-              style={{
-                fontSize: 13,
-                padding: "6px 10px",
-                border: "1px solid rgba(0,0,0,0.12)",
-                borderRadius: 10,
-              }}
-            >
-              {sessionEmail}
-            </div>
+          <div className="app-header-right">
+            <div className="app-userpill">{sessionEmail}</div>
 
             {onLogout && (
               <button
                 onClick={async () => {
                   await onLogout();
                 }}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  background: "white",
-                  fontWeight: 800,
-                  cursor: "pointer",
-                }}
+                type="button"
+                className="btn-ghost"
               >
                 로그아웃
               </button>
@@ -275,7 +247,7 @@ function TopTabs({ isAdmin }: { isAdmin: boolean }) {
   const isAdminInvites = location.pathname.startsWith("/admin/invites");
 
   return (
-    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+    <div className="top-tabs">
       <TabButton active={isDash} onClick={() => nav("/")}>
         대시보드
       </TabButton>
@@ -284,7 +256,6 @@ function TopTabs({ isAdmin }: { isAdmin: boolean }) {
         마스터
       </TabButton>
 
-      {/* ✅ 관리자만 탭 노출 */}
       {isAdmin && (
         <TabButton active={isAdminInvites} onClick={() => nav("/admin/invites")}>
           관리자
@@ -304,19 +275,7 @@ function TabButton({
   children: React.ReactNode;
 }) {
   return (
-    <button
-      onClick={onClick}
-      type="button"
-      style={{
-        padding: "8px 12px",
-        borderRadius: 10,
-        border: "1px solid rgba(0,0,0,0.12)",
-        background: active ? "#111827" : "white",
-        color: active ? "white" : "#111827",
-        fontWeight: 900,
-        cursor: "pointer",
-      }}
-    >
+    <button onClick={onClick} type="button" className={`tab-btn ${active ? "is-active" : ""}`}>
       {children}
     </button>
   );

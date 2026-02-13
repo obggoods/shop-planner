@@ -659,6 +659,48 @@ export default function Dashboard() {
                                     value={onHand === 0 ? "" : onHand}
                                     placeholder="0"
                                     onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                                    onKeyDown={(e) => {
+                                      const k = e.key;
+                                    
+                                      const isEnter = k === "Enter";
+                                      const isDown = k === "ArrowDown";
+                                      const isUp = k === "ArrowUp";
+                                    
+                                      if (!isEnter && !isDown && !isUp) return;
+                                    
+                                      // Enter/방향키 기본 동작(폼 submit, 커서 이동 등) 막기
+                                      e.preventDefault();
+                                    
+                                      const current = e.currentTarget;
+                                    
+                                      // 현재 input이 속한 tableWrap(재고 테이블) 안에서만 이동
+                                      const scope =
+                                        (current.closest(".tableWrap") as HTMLElement | null) ?? document.body;
+                                    
+                                      const inputs = Array.from(
+                                        scope.querySelectorAll<HTMLInputElement>("input.qtyInput:not([disabled])")
+                                      );
+                                    
+                                      const idx = inputs.indexOf(current);
+                                      if (idx < 0) return;
+                                    
+                                      // 이동 방향 결정:
+                                      // - Enter: Shift 누르면 위, 아니면 아래
+                                      // - ArrowUp: 위
+                                      // - ArrowDown: 아래
+                                      const dir =
+                                        isEnter ? (e.shiftKey ? -1 : 1) : isUp ? -1 : 1;
+                                    
+                                      const next = inputs[idx + dir];
+                                    
+                                      if (next) {
+                                        next.focus();
+                                        next.select?.(); // 바로 덮어쓰기 편하게
+                                      } else {
+                                        // 맨 끝(또는 맨 처음)에서 더 가려 하면 그냥 blur
+                                        current.blur();
+                                      }
+                                    }}                                    
                                     onChange={(e) => {
                                       const raw = e.target.value;
                                       const nextQty = raw === "" ? 0 : Number(raw);

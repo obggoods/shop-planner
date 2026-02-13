@@ -411,3 +411,104 @@ button:focus-visible {
   outline: none;
   box-shadow: none;
 }
+/* src/App.css */
+
+/* ====== App Layout ====== */
+.app-container {
+  color: #111827;
+  background: #ffffff;
+}
+
+.app-header {
+  background: #fff;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.app-header-inner {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.app-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 0;
+  gap: 12px;
+}
+
+.app-brand {
+  font-weight: 900;
+  font-size: 18px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.app-userpill {
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.btn-ghost {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn-ghost:hover {
+  background: #f3f4f6;
+}
+
+/* ====== Tabs wrapper (여기서 상단 여백 조절) ====== */
+.app-tabs-wrapper {
+  max-width: 860px;
+  margin: 24px auto 0;   /* ✅ 헤더 아래 탭 상단 여백: 여기만 조절하면 됨 */
+  padding: 0 16px 12px;
+}
+
+/* 탭 버튼 */
+.top-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tab-btn {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  color: #111827;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.tab-btn.is-active {
+  background: #111827;
+  color: #fff;
+}
+
+/* ====== Content wrapper ====== */
+.app-content {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 16px 24px;
+}
+
+/* 로딩/상태 */
+.app-loading {
+  padding: 16px;
+}
