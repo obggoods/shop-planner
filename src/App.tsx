@@ -11,6 +11,8 @@ import Privacy from "./pages/Privacy";
 import Pricing from "./pages/Pricing";
 import InviteGate from "./pages/InviteGate";
 import AdminInvites from "./pages/AdminInvites";
+import ResetPassword from "./pages/ResetPassword";
+
 
 import { supabase, getOrCreateMyProfile } from "./lib/supabaseClient";
 
@@ -190,7 +192,7 @@ export default function App() {
 
       <Routes>
         <Route path="/login" element={<Login />} />
-
+        <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/" element={<Dashboard />} />
         <Route path="/master" element={<Master />} />
 

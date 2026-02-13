@@ -1,7 +1,24 @@
+import "./auth.css";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { FormEvent } from "react";
 import { supabase } from "../lib/supabaseClient";
+
+async function handleForgotPassword() {
+  const email = prompt("가입한 이메일을 입력하세요");
+
+  if (!email) return;
+
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/reset-password`,
+  });
+
+  if (error) {
+    alert("메일 전송 실패: " + error.message);
+  } else {
+    alert("비밀번호 재설정 메일을 확인하세요!");
+  }
+}
 
 export default function Login() {
   const nav = useNavigate();
@@ -61,60 +78,81 @@ useEffect(() => {
   };
 
   return (
-    <div style={{ maxWidth: 420, margin: "60px auto", padding: 16 }}>
-      <h2 style={{ marginBottom: 8 }}>스톡앤메이크 | 재고·제작 관리</h2>
-      <p style={{ marginTop: 0, opacity: 0.7 }}>Supabase 이메일 로그인</p>
+    <div className="auth-wrap">
+      <div className="auth-card">
+        <div className="auth-header">
+          <h2>스톡앤메이크 | 재고·제작 관리</h2>
+          <p>Supabase 이메일 로그인</p>
+        </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <button
-          type="button"
-          onClick={() => setMode("login")}
-          disabled={mode === "login"}
-        >
-          로그인
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("signup")}
-          disabled={mode === "signup"}
-        >
-          회원가입
-        </button>
+        <div className="auth-tabs">
+          <button
+            type="button"
+            onClick={() => setMode("login")}
+            className={`auth-tab ${mode === "login" ? "active" : ""}`}
+          >
+            로그인
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("signup")}
+            className={`auth-tab ${mode === "signup" ? "active" : ""}`}
+          >
+            회원가입
+          </button>
+        </div>
+
+        <form onSubmit={onSubmit} className="auth-form">
+          <div className="form-field">
+            <label htmlFor="email">이메일</label>
+            <input
+              id="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              type="email"
+              placeholder="you@example.com"
+              required
+              autoComplete="email"
+            />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="password">비밀번호</label>
+            <input
+              id="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type="password"
+              placeholder="비밀번호"
+              required
+              autoComplete={mode === "signup" ? "new-password" : "current-password"}
+            />
+          </div>
+
+          <button type="submit" disabled={loading} className="primary-btn">
+            {loading ? "처리 중..." : mode === "signup" ? "회원가입" : "로그인"}
+          </button>
+
+          {/* ✅ 고정 높이 footer 슬롯: 탭 바뀌어도 카드 높이 고정 */}
+          <div className="auth-footer">
+            <button
+              type="button"
+              onClick={handleForgotPassword}
+              className={`link-btn ${mode !== "login" ? "link-placeholder" : ""}`}
+              disabled={mode !== "login"}
+              tabIndex={mode !== "login" ? -1 : 0}
+              aria-hidden={mode !== "login"}
+            >
+              비밀번호를 잊으셨나요?
+            </button>
+
+            {/* ✅ message도 항상 자리 확보 */}
+            <div className={`notice ${message ? "" : "notice-placeholder"}`}>
+              {message || " "}
+            </div>
+          </div>
+        </form>
       </div>
-
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 10 }}>
-        <label>
-          이메일
-          <input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            type="email"
-            placeholder="you@example.com"
-            required
-            style={{ width: "100%", padding: 10, boxSizing: "border-box" }}
-          />
-        </label>
-
-        <label>
-          비밀번호
-          <input
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            type="password"
-            placeholder="비밀번호"
-            required
-            style={{ width: "100%", padding: 10, boxSizing: "border-box" }}
-          />
-        </label>
-
-        <button type="submit" disabled={loading}>
-          {loading ? "처리 중..." : mode === "signup" ? "회원가입" : "로그인"}
-        </button>
-
-        {message && (
-          <div style={{ padding: 10, background: "#f3f4f6" }}>{message}</div>
-        )}
-      </form>
     </div>
   );
 }
