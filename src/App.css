@@ -512,3 +512,153 @@ button:focus-visible {
 .app-loading {
   padding: 16px;
 }
+
+/* ===== Master: product name edit ===== */
+
+.productNameEditRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.iconBtn {
+  border: 1px solid rgba(0,0,0,0.08);
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.iconBtn:hover {
+  background: #f3f4f6;
+}
+
+.productNameRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.productNameText {
+  font-weight: 900;
+  line-height: 1.2;
+}
+.productEditRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.productCategoryInput {
+  width: 160px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,0.12);
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.productNameInput {
+  flex: 0 0 160px;   /* ✅ 고정폭 */
+  width: 200px;      /* ✅ 여기 숫자만 조절하면 됨 */
+  min-width: 0;      /* flex 충돌 방지 */
+  max-width: 220px;
+
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,0.12);
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.productActions {
+  display: flex;
+  align-items: center;
+  gap: 16px; /* 제작대상과 버튼 그룹 간격 */
+}
+
+.makeEnabledWrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.actionButtons {
+  display: flex;
+  gap: 8px;
+}
+
+.productEditRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.productCategoryInput {
+  width: 140px;
+}
+
+.productNameInput {
+  width: 180px;
+  max-width: 260px;
+}
+/* 버튼 텍스트 줄바꿈 방지 */
+.iconBtn {
+  white-space: nowrap;
+}
+
+/* 텍스트 버튼(비활성/삭제)일 때는 가로폭을 늘려서 1줄 유지 */
+.iconBtnText {
+  width: auto;              /* 고정 34px 해제 */
+  min-width: 44px;          /* 2~3글자 안정 */
+  padding: 0 10px;          /* 좌우 여백 */
+}
+/* ✅ 제품 한 줄에서 "오른쪽 액션"이 눌리지 않게 */
+.productLeft {
+  flex: 1;        /* 왼쪽이 남는 공간을 먹고 */
+  min-width: 0;   /* 대신 내부가 줄어들 수 있게(중요) */
+}
+
+/* ✅ 오른쪽 액션 영역은 절대 줄바꿈/세로쪼개짐 방지 */
+.productActions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: nowrap;   /* 줄바꿈 금지 */
+  flex-shrink: 0;      /* 폭이 눌리지 않게 */
+  white-space: nowrap; /* 글자 단위 줄바꿈 방지 */
+}
+
+/* ✅ 제작대상 라벨도 한 줄 고정 */
+.makeEnabledWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* ✅ 버튼 텍스트 줄바꿈 방지 + 가운데 정렬 */
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+/* 텍스트 버튼일 때 폭을 자동으로 늘려 2줄 방지 */
+.iconBtnText {
+  width: auto;
+  min-width: 56px;
+  padding: 0 12px;
+  height: 34px;
+}
+
+.iconBtnSmall {
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+}

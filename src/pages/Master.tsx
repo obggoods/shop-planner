@@ -153,6 +153,13 @@ export default function Master() {
 
   const [newProductName, setNewProductName] = useState("");
   const [newStoreName, setNewStoreName] = useState("");
+  // ✅ 제품명 수정 UI 상태
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [editingProductName, setEditingProductName] = useState<string>("");
+  const editingOriginalRef = useRef<string>("");
+
+  const [editingProductCategory, setEditingProductCategory] = useState<string>("");
+  const editingOriginalCategoryRef = useRef<string>("");
 
   // ✅ 카테고리 콤보박스
   const [newCategory, setNewCategory] = useState<string>("");
@@ -781,6 +788,52 @@ export default function Master() {
     [data.products]
   );
 
+  const saveProductFields = useCallback(
+    async (productId: string, nextNameRaw: string, nextCategoryRaw: string) => {
+      const hit = data.products.find((p) => p.id === productId);
+      if (!hit) return;
+  
+      const nextName = nextNameRaw.trim();
+      const nextCategory = nextCategoryRaw.trim();
+  
+      if (!nextName) {
+        alert("제품명은 비워둘 수 없어.");
+        setEditingProductName(editingOriginalRef.current);
+        setEditingProductCategory(editingOriginalCategoryRef.current);
+        return;
+      }
+  
+      // "미분류"는 DB에 null/""로 저장하고 싶으면 여기서 정규화
+      // 너 UI가 p.category ?? "미분류" 형태면, null/"" 둘 다 OK
+      const normalizedCategory = nextCategory === "" || nextCategory === "미분류" ? "" : nextCategory;
+  
+      // 변경 없으면 종료
+      if (nextName === hit.name && (normalizedCategory || "") === (hit.category || "")) return;
+  
+      const prevProducts = data.products;
+      const next = { ...hit, name: nextName, category: normalizedCategory || null };
+  
+      // ✅ 1) UI 즉시 반영
+      setData((prev) => ({
+        ...prev,
+        products: prev.products.map((p) => (p.id === productId ? next : p)),
+        updatedAt: Date.now(),
+      }));
+  
+      try {
+        // ✅ 2) DB 저장 (업서트)
+        await createProductDB(next);
+      } catch (e: any) {
+        console.error(e);
+        // ✅ 3) 실패 시 롤백
+        setData((prev) => ({ ...prev, products: prevProducts, updatedAt: Date.now() }));
+        alert(`저장 실패: ${e?.message ?? e}`);
+        await refresh();
+      }
+    },
+    [data.products, refresh]
+  );  
+
   // ✅ 제품 제작대상 ON/OFF
   const toggleProductMakeEnabled = useCallback(
     async (productId: string) => {
@@ -1062,6 +1115,7 @@ export default function Master() {
       minWidth: 0,
     }}
   >
+  
 
     {/* ✅ 카테고리 콤보박스 */}
     <div
@@ -1564,125 +1618,217 @@ export default function Master() {
             </div>
   
             {filteredProducts.length === 0 ? (
-              <p style={{ color: "#666" }}>선택한 카테고리에 제품이 없어.</p>
-            ) : (
-              <>
-                <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                  {pagedProducts.map((p) => (
-                    <li
-                      key={p.id}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: 8,
-                        padding: "8px 0",
-                        borderBottom: "1px solid rgba(0,0,0,0.06)",
-                        opacity: p.active ? (p.makeEnabled === false ? 0.6 : 1) : 0.4,
-                      }}
-                    >
-                      <div style={{ display: "flex", flexDirection: "column" }}>
-                        <strong>
-                          [{p.category ?? "미분류"}] {p.name}
-                        </strong>
-                        <span style={{ fontSize: 12, color: "#666" }}>
-                          {p.active ? "활성" : "비활성"}
-                          {p.makeEnabled === false ? " · 제작중지" : ""}
-                        </span>
-                      </div>
-  
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
-                          <input
-                            type="checkbox"
-                            checked={p.makeEnabled !== false}
-                            onChange={() => toggleProductMakeEnabled(p.id)}
-                          />
-                          제작대상
-                        </label>
-  
-                        <button onClick={() => toggleProductActive(p.id)} style={{ padding: "6px 10px" }}>
-                          {p.active ? "비활성" : "활성"}
-                        </button>
-  
-                        <button
-                          onClick={() => deleteProduct(p.id)}
-                          disabled={loading}
-                          style={{ padding: "6px 10px" }}
-                        >
-                          삭제
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-  
-                {/* ✅ 페이지네이션 */}
-                {totalPages > 1 && (
-                  <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
-                    {Array.from({ length: totalPages }).map((_, idx) => {
-                      const pageNum = idx + 1;
-                      const active = pageNum === productListPage;
-  
-                      return (
-                        <button
-                          key={pageNum}
-                          type="button"
-                          onClick={() => setProductListPage(pageNum)}
-                          style={{
-                            padding: "6px 10px",
-                            borderRadius: 10,
-                            border: "1px solid rgba(0,0,0,0.12)",
-                            background: active ? "#111827" : "#fff",
-                            color: active ? "#fff" : "#111827",
-                            fontWeight: 800,
-                            cursor: "pointer",
-                            minWidth: 36,
-                          }}
-                        >
-                          {pageNum}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-  
-          {/* ============================
-              ✅ 입점처 목록
-             ============================ */}
-          <div className="masterCard" style={{ minWidth: 0 }}>
-            <h3 style={{ marginTop: 0 }}>입점처 목록</h3>
-  
-            {stores.length === 0 ? (
-              <p style={{ color: "#666" }}>아직 입점처가 없어. 위에서 추가해봐.</p>
-            ) : (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {stores.map((s) => (
-                  <li
-                    key={s.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 8,
-                      padding: "8px 0",
-                      borderBottom: "1px solid #eee",
-                    }}
-                  >
-                    <strong>{s.name}</strong>
-                    <button onClick={() => deleteStore(s.id)} style={{ padding: "6px 10px" }}>
-                      삭제
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </section>
+  <p style={{ color: "#666" }}>선택한 카테고리에 제품이 없어.</p>
+) : (
+  <>
+    <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+      {pagedProducts.map((p) => (
+        <li
+          key={p.id}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            padding: "8px 0",
+            borderBottom: "1px solid rgba(0,0,0,0.06)",
+            opacity: p.active ? (p.makeEnabled === false ? 0.6 : 1) : 0.4,
+          }}
+        >
+          {/* ✅ 왼쪽: 제품 정보 */}
+<div className="productLeft">
+  <div className="productNameCol">
+    {editingProductId === p.id ? (
+      <div className="productEditRow">
+        <select
+          className="productCategorySelect"
+          value={editingProductCategory}
+          onChange={(e) => setEditingProductCategory(e.target.value)}
+        >
+          <option value="">미분류</option>
+          {categoryOptions.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+
+        <input
+          className="productNameInput"
+          value={editingProductName}
+          autoFocus
+          onChange={(e) => setEditingProductName(e.target.value)}
+          placeholder="제품명"
+          onKeyDown={async (e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              await saveProductFields(p.id, editingProductName, editingProductCategory);
+              setEditingProductId(null);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              setEditingProductName(editingOriginalRef.current);
+              setEditingProductCategory(editingOriginalCategoryRef.current);
+              setEditingProductId(null);
+            }
+          }}
+        />
+
+        <button
+          type="button"
+          className="iconBtn"
+          title="저장"
+          onClick={async () => {
+            await saveProductFields(p.id, editingProductName, editingProductCategory);
+            setEditingProductId(null);
+          }}
+        >
+          ✓
+        </button>
+
+        <button
+          type="button"
+          className="iconBtn"
+          title="취소"
+          onClick={() => {
+            setEditingProductName(editingOriginalRef.current);
+            setEditingProductCategory(editingOriginalCategoryRef.current);
+            setEditingProductId(null);
+          }}
+        >
+          ✕
+        </button>
       </div>
-    </div>
-  );
+    ) : (
+      <div className="productNameRow">
+        <strong className="productNameText">
+          [{p.category ?? "미분류"}] {p.name}
+        </strong>
+
+        <button
+          type="button"
+          className="iconBtn"
+          title="제품명/카테고리 수정"
+          onClick={() => {
+            setEditingProductId(p.id);
+            setEditingProductName(p.name);
+            editingOriginalRef.current = p.name;
+            setEditingProductCategory(p.category ?? "");
+            editingOriginalCategoryRef.current = p.category ?? "";
+          }}
+        >
+          ✎
+        </button>
+      </div>
+    )}
+  </div>
+
+  <span style={{ fontSize: 12, color: "#666" }}>
+    {p.active ? "활성" : "비활성"}
+    {p.makeEnabled === false ? " · 제작중지" : ""}
+  </span>
+</div>
+
+{/* ✅ 오른쪽: 액션 */}
+<div className="productActions">
+  <label className="makeEnabledWrap">
+    <input
+      type="checkbox"
+      checked={p.makeEnabled !== false}
+      onChange={() => toggleProductMakeEnabled(p.id)}
+    />
+    제작대상
+  </label>
+
+  <div className="actionButtons">
+    <button
+      type="button"
+      className={`iconBtn iconBtnText ${p.active ? "iconBtnMuted" : "iconBtnPrimary"}`}
+      onClick={() => toggleProductActive(p.id)}
+    >
+      {p.active ? "비활성" : "활성"}
+    </button>
+
+    <button
+      type="button"
+      className="iconBtn iconBtnDanger iconBtnSmall"
+      onClick={() => deleteProduct(p.id)}
+      disabled={loading}
+    >
+      ✕
+    </button>
+  </div>
+</div>
+
+        </li>
+      ))}
+    </ul>
+
+    {/* ✅ 페이지네이션 */}
+    {totalPages > 1 && (
+      <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
+        {Array.from({ length: totalPages }).map((_, idx) => {
+          const pageNum = idx + 1;
+          const active = pageNum === productListPage;
+
+          return (
+            <button
+              key={pageNum}
+              type="button"
+              onClick={() => setProductListPage(pageNum)}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 10,
+                border: "1px solid rgba(0,0,0,0.12)",
+                background: active ? "#111827" : "#fff",
+                color: active ? "#fff" : "#111827",
+                fontWeight: 800,
+                cursor: "pointer",
+                minWidth: 36,
+              }}
+            >
+              {pageNum}
+            </button>
+          );
+        })}
+      </div>
+    )}
+  </>
+)}
+          </div>  {/* ✅ 제품 목록 카드 닫기 */}
+
+{/* ============================
+    ✅ 입점처 목록
+   ============================ */}
+<div className="masterCard" style={{ minWidth: 0 }}>
+  <h3 style={{ marginTop: 0 }}>입점처 목록</h3>
+
+  {stores.length === 0 ? (
+    <p style={{ color: "#666" }}>아직 입점처가 없어. 위에서 추가해봐.</p>
+  ) : (
+    <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+      {stores.map((s) => (
+        <li
+          key={s.id}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            padding: "8px 0",
+            borderBottom: "1px solid #eee",
+          }}
+        >
+          <strong>{s.name}</strong>
+          <button onClick={() => deleteStore(s.id)} style={{ padding: "6px 10px" }}>
+            삭제
+          </button>
+        </li>
+      ))}
+    </ul>
+  )}
+</div>
+</section>
+  </div>
+</div>
+);
 }
