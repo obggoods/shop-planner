@@ -13,7 +13,7 @@ const StoresPage = lazy(() => import("./features/stores/pages/StoresPage"))
 const SettingsPage = lazy(() => import("./features/settings/pages/SettingsPage"))
 const MarginCalculatorPage = lazy(() => import("./features/margin/pages/MarginCalculatorPage"))
 const SettlementsPage = lazy(() => import("./features/settlements/pages/SettlementsPage"))
-const AdminInvitesPage = lazy(() => import("./pages_legacy/Admininvites"))
+const AdminInvitesPage = lazy(() => import("./pages_legacy/AdminInvites"))
 
 import { supabase, getOrCreateMyProfile } from "./lib/supabaseClient"
 
