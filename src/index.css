@@ -1,57 +1,215 @@
-:root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
-  /* ✅ 우리가 쓰는 전역 컬러 토큰 */
-  --bg: #F9FAFB;                 /* 전체 배경 (눈 편한 오프화이트) */
-  --card: #FFFFFF;               /* 카드 배경 */
-  --border: rgba(0, 0, 0, 0.06); /* 기본 테두리 */
+@custom-variant dark (&:is(.dark *));
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  /* ✅ 다크모드 자동 적용 끄기(지금은 라이트만 고정) */
-  color-scheme: light;
-  color: #213547;
-  background-color: var(--bg);
+/* ===== Base ===== */
+html {
+  scrollbar-gutter: stable;
+  overflow-y: scroll;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
-}
-
-/* ✅ body 배경을 확실히 고정 */
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-
-  background-color: var(--bg);
-  color: #213547;
+  overflow-x: hidden;
+  font-family: var(--font-sans);
 }
 
-/* ✅ Vite 기본값에 있던 '중앙 정렬(display:flex; place-items:center;)' 제거
-   → 앱이 가운데로 몰리는 문제 방지 */
-#root {
-  min-height: 100vh;
+/* number input 스핀 버튼 제거 */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
 }
 
-/* 버튼 기본 스타일(너 프로젝트 버튼 스타일이 많아서 최소만 유지) */
-button {
-  font-family: inherit;
+/* 전역 링크 파란색 강제 제거 */
+a {
+  color: inherit;
+  text-decoration: inherit;
+  font-weight: inherit;
+}
+a:hover,
+a:visited {
+  color: inherit;
 }
 
-/* ✅ 포커스(주황색/파란색 링) 필요하면 여기서 조절 가능 */
-button:focus,
-button:focus-visible {
-  outline: none;
-  box-shadow: none;
+/* ===== Warm + Sage Tokens ===== */
+:root {
+  --background: oklch(0.992 0.010 95);
+  --foreground: oklch(0.280 0.015 90);
+
+  --card: oklch(0.996 0.008 95);
+  --card-foreground: oklch(0.280 0.015 90);
+
+  --popover: oklch(0.996 0.008 95);
+  --popover-foreground: oklch(0.280 0.015 90);
+
+  --primary: oklch(0.620 0.085 145);
+  --primary-foreground: oklch(0.990 0.005 95);
+
+  --secondary: oklch(0.965 0.012 95);
+  --secondary-foreground: oklch(0.360 0.015 90);
+
+  --muted: oklch(0.975 0.010 95);
+  --muted-foreground: oklch(0.520 0.015 90);
+
+  --accent: oklch(0.935 0.030 145);
+  --accent-foreground: oklch(0.320 0.020 140);
+
+  --destructive: oklch(0.620 0.190 25);
+  --destructive-foreground: oklch(0.990 0.005 95);
+
+  --border: oklch(0.915 0.012 95);
+  --input: oklch(0.915 0.012 95);
+  --ring: oklch(0.620 0.085 145);
+
+  --chart-1: oklch(0.620 0.085 145);
+  --chart-2: oklch(0.640 0.080 165);
+  --chart-3: oklch(0.700 0.070 110);
+  --chart-4: oklch(0.650 0.090 35);
+  --chart-5: oklch(0.620 0.070 250);
+
+  --sidebar: oklch(0.988 0.010 95);
+  --sidebar-foreground: oklch(0.280 0.015 90);
+  --sidebar-primary: oklch(0.620 0.085 145);
+  --sidebar-primary-foreground: oklch(0.990 0.005 95);
+  --sidebar-accent: oklch(0.935 0.030 145);
+  --sidebar-accent-foreground: oklch(0.320 0.020 140);
+  --sidebar-border: oklch(0.915 0.012 95);
+  --sidebar-ring: oklch(0.620 0.085 145);
+
+  --font-sans: Pretendard, system-ui, -apple-system, Segoe UI, Roboto, Arial,
+    "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  --font-serif: "Source Serif 4", serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --radius: 0.75rem;
+}
+
+.dark {
+  --background: oklch(0.190 0.010 140);
+  --foreground: oklch(0.940 0.010 95);
+
+  --card: oklch(0.230 0.012 140);
+  --card-foreground: oklch(0.940 0.010 95);
+
+  --popover: oklch(0.230 0.012 140);
+  --popover-foreground: oklch(0.940 0.010 95);
+
+  --primary: oklch(0.720 0.090 145);
+  --primary-foreground: oklch(0.200 0.010 140);
+
+  --secondary: oklch(0.260 0.012 140);
+  --secondary-foreground: oklch(0.940 0.010 95);
+
+  --muted: oklch(0.240 0.010 140);
+  --muted-foreground: oklch(0.740 0.010 95);
+
+  --accent: oklch(0.310 0.030 145);
+  --accent-foreground: oklch(0.940 0.010 95);
+
+  --destructive: oklch(0.650 0.190 25);
+  --destructive-foreground: oklch(0.980 0.006 95);
+
+  --border: oklch(0.320 0.010 140);
+  --input: oklch(0.320 0.010 140);
+  --ring: oklch(0.720 0.090 145);
+
+  --sidebar: oklch(0.190 0.010 140);
+  --sidebar-foreground: oklch(0.940 0.010 95);
+  --sidebar-primary: oklch(0.720 0.090 145);
+  --sidebar-primary-foreground: oklch(0.200 0.010 140);
+  --sidebar-accent: oklch(0.310 0.030 145);
+  --sidebar-accent-foreground: oklch(0.940 0.010 95);
+  --sidebar-border: oklch(0.320 0.010 140);
+  --sidebar-ring: oklch(0.720 0.090 145);
+}
+
+/* ===== Tailwind v4 Theme mapping (important) ===== */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-serif: var(--font-serif);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* 안전한 base layer: 문제 유틸(@apply border-border) 사용 안 함 */
+@layer base {
+ /* Tailwind v4 기본 border 색(currentColor) 방지: 전역 border 색을 토큰으로 고정 */
+ *,
+ ::before,
+ ::after {
+   border-color: var(--border);
+ }
+
+ body {
+   background: var(--background);
+   color: var(--foreground);
+ }
+}
+/* 모달 열 때 스크롤바 유무로 레이아웃이 흔들리는 문제 방지 */
+html {
+  scrollbar-gutter: stable;
+}
+
+/* Radix(Dialog)가 스크롤 잠금 시 body에 padding-right를 넣어 생기는 흰 여백 제거 */
+body[data-scroll-locked] {
+  padding-right: 0 !important;
+}
+
+html {
+  overflow-y: scroll;
 }

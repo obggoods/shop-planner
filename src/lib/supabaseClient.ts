@@ -80,3 +80,161 @@ export async function updateMyLowStockThreshold(value: number) {
   if (error) throw error;
   return data as Profile;
 }
+// =======================
+// 마진 계산기: DB 저장용
+// =======================
+
+export type MarginProductRow = {
+  id: string
+  user_id: string
+  name: string
+  memo: string | null
+  data: any
+  created_at: string
+  updated_at: string
+}
+
+export type MaterialLibraryRow = {
+  id: string
+  user_id: string
+  name: string
+  unit_price: number
+  created_at: string
+  updated_at: string
+}
+
+export async function listMyMarginProducts() {
+  const { data: authData, error: authErr } = await supabase.auth.getUser()
+  if (authErr) throw authErr
+  const user = authData.user
+  if (!user) throw new Error("No authenticated user")
+
+  const { data, error } = await supabase
+    .from("margin_products")
+    .select("id,user_id,name,memo,data,created_at,updated_at")
+    .order("updated_at", { ascending: false })
+
+  if (error) throw error
+  return (data ?? []) as MarginProductRow[]
+}
+
+export async function upsertMyMarginProduct(input: {
+  id?: string
+  name: string
+  memo?: string
+  data: any
+}) {
+  const { data: authData, error: authErr } = await supabase.auth.getUser()
+  if (authErr) throw authErr
+  const user = authData.user
+  if (!user) throw new Error("No authenticated user")
+
+  const payload: any = {
+    user_id: user.id,
+    name: input.name,
+    memo: input.memo ?? null,
+    data: input.data ?? {},
+  }
+  if (input.id) payload.id = input.id
+
+  const { data, error } = await supabase
+    .from("margin_products")
+    .upsert(payload)
+    .select("id,user_id,name,memo,data,created_at,updated_at")
+    .single()
+
+  if (error) throw error
+  return data as MarginProductRow
+}
+
+export async function deleteMyMarginProduct(id: string) {
+  const { data: authData, error: authErr } = await supabase.auth.getUser()
+  if (authErr) throw authErr
+  const user = authData.user
+  if (!user) throw new Error("No authenticated user")
+
+  const { error } = await supabase
+    .from("margin_products")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id)
+
+  if (error) throw error
+}
+
+export async function listMyMaterialLibrary() {
+  const { data: authData, error: authErr } = await supabase.auth.getUser()
+  if (authErr) throw authErr
+  const user = authData.user
+  if (!user) throw new Error("No authenticated user")
+
+  const { data, error } = await supabase
+    .from("material_library")
+    .select("id,user_id,name,unit_price,created_at,updated_at")
+    .order("updated_at", { ascending: false })
+
+  if (error) throw error
+  return (data ?? []) as MaterialLibraryRow[]
+}
+
+// 동일 이름이면 갱신, 없으면 생성(유니크 인덱스 기반)
+export async function upsertMyMaterialLibraryItem(input: {
+  name: string
+  unitPrice: number
+}) {
+  const { data: authData, error: authErr } = await supabase.auth.getUser()
+  if (authErr) throw authErr
+  const user = authData.user
+  if (!user) throw new Error("No authenticated user")
+
+  const name = (input.name ?? "").toString().trim()
+  const unit_price = Math.max(0, Number(input.unitPrice) || 0)
+
+  // 1) 먼저 존재하면 update
+  const { data: existing, error: selErr } = await supabase
+    .from("material_library")
+    .select("id")
+    .eq("user_id", user.id)
+    .ilike("name", name) // 대소문자 무시(근사)
+    .maybeSingle()
+
+  if (selErr) throw selErr
+
+  if (existing?.id) {
+    const { data, error } = await supabase
+      .from("material_library")
+      .update({ unit_price })
+      .eq("id", existing.id)
+      .eq("user_id", user.id)
+      .select("id,user_id,name,unit_price,created_at,updated_at")
+      .single()
+
+    if (error) throw error
+    return data as MaterialLibraryRow
+  }
+
+  // 2) 없으면 insert
+  const { data, error } = await supabase
+    .from("material_library")
+    .insert({ user_id: user.id, name, unit_price })
+    .select("id,user_id,name,unit_price,created_at,updated_at")
+    .single()
+
+  if (error) throw error
+  return data as MaterialLibraryRow
+}
+
+export async function deleteMyMaterialLibraryItem(id: string) {
+  const { data: authData, error: authErr } = await supabase.auth.getUser()
+  if (authErr) throw authErr
+  const user = authData.user
+  if (!user) throw new Error("No authenticated user")
+
+  const { error } = await supabase
+    .from("material_library")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id)
+
+  if (error) throw error
+}

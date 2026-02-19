@@ -17,11 +17,26 @@ import {
   deleteCategoryDB,
 } from "../data/store.supabase";
 import {
-  supabase,
   getOrCreateMyProfile,
   updateMyDefaultTargetQty,
   updateMyLowStockThreshold,
 } from "../lib/supabaseClient";
+
+import { Button } from "@/components/ui/button"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
+
 
 /** ✅ CSV row 타입(반드시 고정) */
 type ProductCsvRow = { category: string; name: string; active: boolean };
@@ -166,7 +181,6 @@ export default function Master() {
   // ✅ 카테고리 경고는 '직접 타이핑' 중복일 때만 띄우기 위한 플래그
   const [categoryTyped, setCategoryTyped] = useState(false);
   const [categoryOpen, setCategoryOpen] = useState(false);
-  const categoryWrapRef = useRef<HTMLDivElement | null>(null);
 
   // ✅ categories 테이블 기반 카테고리 목록(제품이 없어도 유지)
   const [categories, setCategories] = useState<string[]>([]);
@@ -391,60 +405,6 @@ export default function Master() {
     },
     [data.storeProductStates]
   );
-
-  // =========================================================
-  // ✅✅✅ 카테고리 병합(미분류 -> 선택한 카테고리) 기능 추가
-  // =========================================================
-  const uncategorizedCount = useMemo(() => {
-    return (data.products ?? []).filter((p) => (p.category ?? null) === null).length;
-  }, [data.products]);
-
-  const [mergeTargetCategory, setMergeTargetCategory] = useState<string>("");
-  const [isMergingCategory, setIsMergingCategory] = useState(false);
-
-  const mergeUncategorizedToCategory = useCallback(async () => {
-    const target = mergeTargetCategory.trim();
-    if (!target) return;
-    if (uncategorizedCount === 0) return;
-
-    const ok = confirm(
-      `미분류 제품 ${uncategorizedCount}개를 "${target}" 카테고리로 이동할까요?\n(즉시 반영 후 DB 저장합니다.)`
-    );
-    if (!ok) return;
-
-    const prevProducts = data.products;
-
-    // ✅ 1) UI 즉시 반영: category=null 인 제품들 -> target
-    setIsMergingCategory(true);
-    setData((prev) => ({
-      ...prev,
-      products: prev.products.map((p) => (p.category === null ? { ...p, category: target } : p)),
-      updatedAt: Date.now(),
-    }));
-
-    // ✅ 2) 혹시 target이 categories에 없다면(드물지만) 드롭다운에도 즉시 반영
-    setCategories((prev) => {
-      const set = new Set(prev.map((x) => x.trim()));
-      set.add(target);
-      return Array.from(set);
-    });
-
-    try {
-      // ✅ 3) DB 반영: products.category IS NULL 인 행들을 한 번에 update
-      const { error } = await supabase.from("products").update({ category: target }).is("category", null);
-      if (error) throw error;
-
-      setMergeTargetCategory("");
-    } catch (e: any) {
-      console.error(e);
-      // ❌ 실패 시 롤백
-      setData((prev) => ({ ...prev, products: prevProducts, updatedAt: Date.now() }));
-      alert(`카테고리 병합 실패: ${e?.message ?? e}`);
-      await refresh();
-    } finally {
-      setIsMergingCategory(false);
-    }
-  }, [mergeTargetCategory, uncategorizedCount, data.products, refresh]);
 
   // ✅ 카테고리 삭제 (Optimistic) : products null 처리 + categories 테이블에서도 제거
   const deleteCategory = useCallback(
@@ -968,338 +928,473 @@ export default function Master() {
   if (errorMsg) return <div style={{ padding: 16, color: "crimson" }}>에러: {errorMsg}</div>;
 
   return (
-    <div className="pageWrap">
-      <div className="pageContainer">
-        <h2 style={{ marginTop: 0 }}>마스터 관리</h2>
-
+    <div className="min-h-screen bg-background">
+      <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold m-0">마스터 관리</h2>
+        </div>
+  
         {loading && (
-          <div style={{ fontSize: 12, color: "#666", margin: "6px 0 10px" }}>
+          <div className="text-sm text-muted-foreground">
             동기화 중…
           </div>
-        )}
+        )}  
 
         {/* ✅ 유저별 설정 */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: 12,
-            border: "1px solid rgba(0,0,0,0.08)",
-            borderRadius: 12,
-            marginBottom: 16,
-            background: "#fff",
-            flexWrap: "wrap",
+<div className="ui-card mb-4">
+  <div className="ui-card-body">
+    <div className="flex flex-wrap items-center gap-4">
+      <div className="flex items-center gap-2">
+        <div className="font-semibold">기본 목표 재고 수량</div>
+        <input
+          className="ui-input w-[90px]"
+          type="number"
+          min={0}
+          step={1}
+          value={defaultTargetQtyInput}
+          onChange={(e) => setDefaultTargetQtyInput(e.target.value)}
+          onBlur={async () => {
+            const val =
+              defaultTargetQtyInput.trim() === ""
+                ? 0
+                : Math.max(0, parseInt(defaultTargetQtyInput, 10) || 0)
+
+            setDefaultTargetQtyInput(String(val))
+
+            try {
+              setProfileSaving(true)
+              await updateMyDefaultTargetQty(val)
+            } catch (e) {
+              console.error("[profiles] failed to save default_target_qty", e)
+            } finally {
+              setProfileSaving(false)
+            }
           }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ fontWeight: 700 }}>기본 목표 재고 수량</div>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={defaultTargetQtyInput}
-              onChange={(e) => setDefaultTargetQtyInput(e.target.value)}
-              onBlur={async () => {
-                const val =
-                  defaultTargetQtyInput.trim() === ""
-                    ? 0
-                    : Math.max(0, parseInt(defaultTargetQtyInput, 10) || 0);
+          disabled={profileLoading || profileSaving}
+        />
+      </div>
 
-                setDefaultTargetQtyInput(String(val));
+      <div className="flex items-center gap-2">
+        <div className="font-semibold">최소 재고 수량(≤)</div>
+        <input
+          className="ui-input w-[70px]"
+          type="number"
+          min={0}
+          step={1}
+          value={lowStockThresholdInput}
+          onChange={(e) => setLowStockThresholdInput(e.target.value)}
+          onBlur={async () => {
+            const val =
+              lowStockThresholdInput.trim() === ""
+                ? 0
+                : Math.max(0, parseInt(lowStockThresholdInput, 10) || 0)
 
-                try {
-                  setProfileSaving(true);
-                  await updateMyDefaultTargetQty(val);
-                } catch (e) {
-                  console.error("[profiles] failed to save default_target_qty", e);
-                } finally {
-                  setProfileSaving(false);
-                }
-              }}
-              disabled={profileLoading || profileSaving}
-              style={{
-                width: 90,
-                padding: "6px 10px",
-                border: "1px solid rgba(0,0,0,0.18)",
-                borderRadius: 10,
-              }}
-            />
-          </div>
+            setLowStockThresholdInput(String(val))
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ fontWeight: 700 }}>최소 재고 수량(≤)</div>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={lowStockThresholdInput}
-              onChange={(e) => setLowStockThresholdInput(e.target.value)}
-              onBlur={async () => {
-                const val =
-                  lowStockThresholdInput.trim() === ""
-                    ? 0
-                    : Math.max(0, parseInt(lowStockThresholdInput, 10) || 0);
+            try {
+              setProfileSaving(true)
+              await updateMyLowStockThreshold(val)
+            } catch (e) {
+              console.error("[profiles] failed to save low_stock_threshold", e)
+            } finally {
+              setProfileSaving(false)
+            }
+          }}
+          disabled={profileLoading || profileSaving}
+        />
+      </div>
 
-                setLowStockThresholdInput(String(val));
+      <div className="ui-muted">
+        {profileLoading ? "불러오는 중…" : profileSaving ? "저장 중…" : "제작 리스트 계산 기준으로 사용돼요."}
+      </div>
+    </div>
+  </div>
+</div>
 
-                try {
-                  setProfileSaving(true);
-                  await updateMyLowStockThreshold(val);
-                } catch (e) {
-                  console.error("[profiles] failed to save low_stock_threshold", e);
-                } finally {
-                  setProfileSaving(false);
-                }
-              }}
-              disabled={profileLoading || profileSaving}
-              style={{
-                width: 70,
-                padding: "6px 10px",
-                border: "1px solid rgba(0,0,0,0.18)",
-                borderRadius: 10,
-              }}
-            />
-          </div>
-
-          <div style={{ fontSize: 12, color: "#666" }}>
-            {profileLoading ? "불러오는 중…" : profileSaving ? "저장 중…" : "제작 리스트 계산 기준으로 사용돼요."}
-          </div>
-        </div>
 
         {/* ✅ 상단: 제품추가 / 입점처추가 */}
-        <section className="masterTopGrid">
-          <div className="masterCard masterProducts">
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: 12,
-                marginBottom: 12,
-                flexWrap: "wrap",
-              }}
-            >
-              <h3 style={{ margin: 0 }}>제품 추가</h3>
+<section className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-start">
+  {/* ✅ 제품 추가 카드 */}
+  <div className="ui-card min-w-0">
+    <div className="ui-card-header">
+      <h3 className="ui-card-title">제품 추가</h3>
 
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button type="button" onClick={downloadProductCsvTemplate} style={{ padding: "6px 10px", fontSize: 13 }}>
-                  CSV 템플릿 다운로드
-                </button>
+      <div className="ui-card-actions">
+        <button type="button" className="ui-btn-outline" onClick={downloadProductCsvTemplate}>
+          CSV 템플릿 다운로드
+        </button>
 
-                <button
-                  type="button"
-                  onClick={() => csvInputRef.current?.click()}
-                  disabled={loading || csvBusy}
-                  style={{ padding: "6px 10px", fontSize: 13 }}
-                >
-                  CSV로 제품 일괄 추가/업데이트
-                </button>
-
-                <input
-                  ref={csvInputRef}
-                  type="file"
-                  accept=".csv"
-                  style={{ display: "none" }}
-                  onChange={onChangeProductCsv}
-                />
-              </div>
-            </div>
-
-             <div
-    style={{
-      display: "flex",
-      gap: 8,
-      flexWrap: "wrap",
-      alignItems: "flex-start",
-      minWidth: 0,
-    }}
-  >
-  
-
-    {/* ✅ 카테고리 콤보박스 */}
-    <div
-      ref={categoryWrapRef}
-      style={{
-        position: "relative",
-        flex: "1 1 180px",
-        minWidth: 160,
-        maxWidth: 220,
-      }}
-    >
-      <input
-        value={newCategory}
-        onChange={(e) => {
-          setCategoryTyped(true);
-          setNewCategory(e.target.value);
-          setCategoryOpen(true);
-        }}
-        onFocus={() => setCategoryOpen(true)}
-        onBlur={() => {
-          setTimeout(() => setCategoryOpen(false), 120);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            saveCategoryOnly();
-          }
-        }}
-        placeholder="카테고리 입력/선택"
-        style={{
-          padding: 8,
-          width: "100%",
-          height: 36,
-          boxSizing: "border-box",
-        }}
-      />
-
-      {isExistingCategory && categoryTyped && (
-        <div
-          style={{
-            marginTop: 4,
-            fontSize: 12,
-            color: "#9ca3af",
-            userSelect: "none",
-          }}
+        <button
+          type="button"
+          className="ui-btn-outline"
+          onClick={() => csvInputRef.current?.click()}
+          disabled={loading || csvBusy}
         >
-          이미 존재하는 카테고리입니다
-        </div>
-      )}
+          CSV로 제품 일괄 추가/업데이트
+        </button>
 
-      {categoryOpen && categoryOptions.length > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            top: "100%",
-            left: 0,
-            right: 0,
-            marginTop: 6,
-            border: "1px solid rgba(0,0,0,0.12)",
-            borderRadius: 10,
-            background: "white",
-            boxShadow: "0 10px 20px rgba(0,0,0,0.08)",
-            maxHeight: 240,
-            overflow: "auto",
-            zIndex: 50,
-          }}
-        >
-          {categoryOptions
-            .filter((c) => {
-              const q = newCategory.trim();
-              if (!q) return true;
-              return c.includes(q);
-            })
-            .map((c) => (
-              <div
-                key={c}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  padding: "6px 10px",
-                  borderBottom: "1px solid rgba(0,0,0,0.06)",
-                  cursor: "pointer",
-                }}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setCategoryTyped(false);
-                  setNewCategory(c);
-                  setCategoryOpen(false);
-                }}
-              >
-                <div style={{ fontSize: 13 }}>{c}</div>
-
-                <button
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deleteCategory(c);
-                  }}
-                  title="카테고리 삭제"
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    color: "rgb(220,38,38)",
-                    fontSize: 13,
-                    lineHeight: "13px",
-                    padding: "2px 6px",
-                    cursor: "pointer",
-                    opacity: 0.7,
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-                  onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.7")}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-        </div>
-      )}
-    </div>
-
-    {/* ✅ 제품명 */}
-    <input
-      value={newProductName}
-      onChange={(e) => setNewProductName(e.target.value)}
-      placeholder="예: 미드나잇블루"
-      style={{
-        flex: "2 1 220px",
-        padding: 8,
-        minWidth: 0,
-        height: 36,
-        boxSizing: "border-box",
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") addProduct();
-      }}
-    />
-
-    {/* ✅ 추가 버튼 */}
-    <button
-      onClick={addProduct}
-      style={{
-        padding: "8px 12px",
-        height: 36,
-        boxSizing: "border-box",
-        flex: "0 0 auto",
-        whiteSpace: "nowrap",
-      }}
-      disabled={loading}
-    >
-      추가
-    </button>
-  </div>
-
-
-  {/* ✅✅✅ 미분류 병합 UI */}
-  <div
-    style={{
-      marginTop: 12,
-      padding: 10,
-      border: "1px solid rgba(0,0,0,0.08)",
-      borderRadius: 12,
-      background: "rgba(17, 24, 39, 0.02)",
-    }}
-  >
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-      <div>
-        <div style={{ fontWeight: 800, fontSize: 13 }}>미분류 제품 병합</div>
-        <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-          미분류(null) 제품 {uncategorizedCount}개를 선택한 카테고리로 한 번에 이동
-        </div>
+        <input
+          ref={csvInputRef}
+          type="file"
+          accept=".csv"
+          className="hidden"
+          onChange={onChangeProductCsv}
+        />
       </div>
     </div>
 
-    <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+    <div className="ui-card-body space-y-3">
+      {/* 입력 라인 */}
+      <div className="flex flex-wrap items-center gap-2 min-w-0">
+        {/* ✅ 카테고리 콤보박스 (Popover + Command) */}
+        <Popover
+          open={categoryOpen}
+          onOpenChange={(open) => {
+            setCategoryOpen(open)
+            if (!open) setCategoryTyped(false)
+          }}
+        >
+          <div className="flex-[1_1_180px] min-w-[160px] max-w-[220px]">
+            <PopoverTrigger asChild>
+              <Button type="button" variant="outline" className="w-full justify-between h-10">
+                <span className="truncate">
+                  {newCategory.trim() ? newCategory : "카테고리 입력/선택"}
+                </span>
+                <span className="text-muted-foreground">▾</span>
+              </Button>
+            </PopoverTrigger>
+
+            <PopoverContent align="start" className="p-0 w-[--radix-popover-trigger-width]">
+              <Command>
+                <CommandInput
+                  placeholder="카테고리 검색/입력..."
+                  value={newCategory}
+                  onValueChange={(v) => {
+                    setCategoryTyped(true)
+                    setNewCategory(v)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      saveCategoryOnly()
+                    }
+                  }}
+                />
+                <CommandList>
+                  <CommandEmpty>
+                    <div className="px-2 py-2 text-sm text-muted-foreground">
+                      검색 결과가 없습니다.
+                      {newCategory.trim() ? " Enter로 새 카테고리를 저장할 수 있어요." : ""}
+                    </div>
+                  </CommandEmpty>
+
+                  <CommandGroup>
+                    {categoryOptions
+                      .filter((c) => {
+                        const q = newCategory.trim()
+                        if (!q) return true
+                        return c.includes(q)
+                      })
+                      .map((c) => (
+                        <CommandItem
+                          key={c}
+                          value={c}
+                          onSelect={() => {
+                            setCategoryTyped(false)
+                            setNewCategory(c)
+                            setCategoryOpen(false)
+                          }}
+                          className="flex items-center justify-between"
+                        >
+                          <span className="truncate">{c}</span>
+
+                          <button
+                            type="button"
+                            className="ui-icon-btn text-destructive"
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              deleteCategory(c)
+                            }}
+                            title="카테고리 삭제"
+                          >
+                            ×
+                          </button>
+                        </CommandItem>
+                      ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+
+            {isExistingCategory && categoryTyped && (
+              <div className="mt-1 text-xs text-muted-foreground select-none">
+                이미 존재하는 카테고리입니다
+              </div>
+            )}
+          </div>
+        </Popover>
+
+        {/* ✅ 제품명 */}
+        <input
+          className="ui-input flex-[2_1_220px] min-w-0"
+          value={newProductName}
+          onChange={(e) => setNewProductName(e.target.value)}
+          placeholder="예: 미드나잇블루"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") addProduct()
+          }}
+        />
+
+        {/* ✅ 추가 버튼 */}
+        <button className="ui-btn flex-shrink-0 whitespace-nowrap" onClick={addProduct} disabled={loading}>
+          추가
+        </button>
+      </div>
+    </div>
+  </div>
+
+  {/* ✅ 입점처 추가 카드 */}
+  <div className="ui-card min-w-0">
+    <div className="ui-card-header">
+      <h3 className="ui-card-title">입점처 추가</h3>
+      <div className="ui-card-actions" />
+    </div>
+
+    <div className="ui-card-body">
+      <div className="flex items-center gap-2">
+        <input
+          className="ui-input flex-1"
+          value={newStoreName}
+          onChange={(e) => setNewStoreName(e.target.value)}
+          placeholder="예: 홍대 A소품샵"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") addStore()
+          }}
+        />
+
+        <button className="ui-btn" onClick={addStore} disabled={loading}>
+          추가
+        </button>
+      </div>
+    </div>
+  </div>
+</section>
+  
+        {/* ✅ 백업/복구 */}
+<section className="flex flex-wrap gap-4 mb-4">
+  <div className="ui-card min-w-[280px] flex-1">
+    <div className="ui-card-body">
+      <h3 className="text-base font-semibold m-0">백업 / 복구</h3>
+      <div className="h-3" />
+
+      <div className="flex flex-wrap items-start gap-2">
+        <button type="button" className="ui-btn-outline" onClick={handleBackup}>
+          백업(JSON 다운로드)
+        </button>
+
+        <button
+          type="button"
+          className="ui-btn-outline"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          복구(JSON 가져오기)
+        </button>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) handleRestore(f)
+          }}
+        />
+      </div>
+
+      <p className="ui-muted text-sm mt-3 mb-0">
+        * 백업은 “현재 DB 데이터 기준”으로 export 하는 용도.
+      </p>
+    </div>
+  </div>
+</section>
+  
+        {/* ✅ 입점처별 취급 제품 설정 */}
+<section className="ui-card mb-4">
+  <div className="ui-card-body space-y-3">
+    <div>
+      <h3 className="text-base font-semibold m-0">입점처별 취급 제품 설정</h3>
+      <p className="ui-muted mt-1">
+        입점처마다 입고하는 제품이 다르면 여기서 ON/OFF로 관리해. (OFF면 대시보드에서 숨김 + 제작 계산 제외)
+      </p>
+    </div>
+
+    {stores.length === 0 ? (
+      <p className="ui-muted">입점처가 없어. 먼저 입점처를 추가해줘.</p>
+    ) : products.length === 0 ? (
+      <p className="ui-muted">제품이 없어. 먼저 제품을 추가해줘.</p>
+    ) : (
+      <div className="flex flex-wrap items-center gap-3">
+        <select
+          className="ui-select min-w-[220px]"
+          value={manageStoreId}
+          onChange={(e) => setManageStoreId(e.target.value)}
+        >
+          <option value="">(입점처 선택)</option>
+          {stores.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+
+        {!manageStoreId ? (
+          <span className="ui-muted text-sm">입점처를 선택하면 제품 ON/OFF 목록이 보여.</span>
+        ) : (
+          <span className="text-sm font-semibold">
+            선택됨: {stores.find((s) => s.id === manageStoreId)?.name}
+          </span>
+        )}
+      </div>
+    )}
+
+    {!!manageStoreId && (
+      <div className="mt-2 border-t border-border pt-3 space-y-3">
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="ui-btn-outline"
+            onClick={() => toggleAll(manageStoreId, true)}
+          >
+            전체 ON
+          </button>
+
+          <button
+            type="button"
+            className="ui-btn-outline"
+            onClick={() => toggleAll(manageStoreId, false)}
+          >
+            전체 OFF
+          </button>
+        </div>
+
+        {(() => {
+          // ✅ 활성 제품만 대상
+          const activeProducts = products.filter((p) => p.active)
+
+          // ✅ 카테고리별 그룹핑
+          const groups = new Map<string, Product[]>()
+          for (const p of activeProducts) {
+            const cat = (p.category ?? "미분류").trim() || "미분류"
+            const arr = groups.get(cat) ?? []
+            arr.push(p)
+            groups.set(cat, arr)
+          }
+
+          // ✅ 카테고리 정렬 (가나다)
+          const cats = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b, "ko"))
+
+          return (
+            <div className="space-y-3">
+              {cats.map((cat) => {
+                const list = groups.get(cat) ?? []
+                const sorted = [...list].sort((a, b) => a.name.localeCompare(b.name, "ko"))
+
+                // 기본값 유지(현재 코드와 동일): 펼침 여부는 openStoreCats에 따름
+                const isOpen = openStoreCats[cat] ?? false
+                const onCount = sorted.reduce(
+                  (acc, p) => (isEnabledInStore(manageStoreId, p.id) ? acc + 1 : acc),
+                  0
+                )
+
+                return (
+                  <div key={cat} className="rounded-xl border border-border bg-background overflow-hidden">
+                    {/* 카테고리 헤더 */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpenStoreCats((prev) => ({
+                          ...prev,
+                          [cat]: !(prev[cat] ?? true),
+                        }))
+                      }
+                      className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left bg-muted/30 hover:bg-muted/50"
+                    >
+                      <span className="text-sm font-semibold">
+                        {cat}{" "}
+                        <span className="text-xs text-muted-foreground font-medium">
+                          ({onCount}/{sorted.length} ON)
+                        </span>
+                      </span>
+
+                      <span className="text-muted-foreground font-semibold">
+                        {isOpen ? "▾" : "▸"}
+                      </span>
+                    </button>
+
+                    {/* 카테고리 바디 */}
+                    {isOpen && (
+                      <ul className="list-none m-0 p-0">
+                        {sorted.map((p) => {
+                          const enabled = isEnabledInStore(manageStoreId, p.id)
+
+                          return (
+                            <li
+                              key={p.id}
+                              className={`flex items-center justify-between gap-3 px-3 py-2 border-t border-border ${
+                                enabled ? "" : "opacity-50"
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold truncate">{p.name}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  {enabled ? "ON (취급)" : "OFF (미취급)"}
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => toggleOne(manageStoreId, p.id, !enabled)}
+                                className={enabled ? "ui-btn" : "ui-btn-outline"}
+                              >
+                                {enabled ? "OFF" : "ON"}
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })()}
+      </div>
+    )}
+  </div>
+</section>
+
+  
+        {/* ✅ 하단: 제품 목록 / 입점처 목록 */}
+        <section className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-start">
+
+          <div className="ui-card min-w-0">
+  <div className="ui-card-body space-y-3">
+    <h3 className="text-base font-semibold m-0">제품 목록</h3>
+
+    {/* ✅ 카테고리 필터 */}
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs text-muted-foreground">카테고리:</span>
+
       <select
-        value={mergeTargetCategory}
-        onChange={(e) => setMergeTargetCategory(e.target.value)}
-        disabled={isMergingCategory || uncategorizedCount === 0}
-        style={{ padding: 8, minWidth: 220 }}
+        className="ui-select"
+        value={productListCategory}
+        onChange={(e) => setProductListCategory(e.target.value)}
       >
-        <option value="">(이동할 카테고리 선택)</option>
+        <option value="all">전체</option>
+        <option value="uncategorized">미분류</option>
         {categoryOptions.map((c) => (
           <option key={c} value={c}>
             {c}
@@ -1307,525 +1402,207 @@ export default function Master() {
         ))}
       </select>
 
-      <button
-        type="button"
-        onClick={mergeUncategorizedToCategory}
-        disabled={!mergeTargetCategory.trim() || isMergingCategory || uncategorizedCount === 0}
-        style={{
-          padding: "8px 12px",
-          opacity: !mergeTargetCategory.trim() || uncategorizedCount === 0 ? 0.5 : 1,
-        }}
-      >
-        {isMergingCategory ? "적용중..." : "적용"}
-      </button>
-
-      {uncategorizedCount === 0 && <span style={{ fontSize: 12, color: "#6b7280" }}>미분류 제품이 없습니다</span>}
+      <span className="text-xs text-muted-foreground">
+        {filteredProducts.length === 0
+          ? "0개"
+          : `${Math.min((productListPage - 1) * ITEMS_PER_PAGE + 1, filteredProducts.length)}-${Math.min(
+              productListPage * ITEMS_PER_PAGE,
+              filteredProducts.length
+            )} / ${filteredProducts.length}개`}
+      </span>
     </div>
-  </div>
-</div>
 
-<div className="masterCard masterStores">
-  <h3 style={{ marginTop: 0 }}>입점처 추가</h3>
-
-  <div style={{ display: "flex", gap: 8 }}>
-    <input
-      value={newStoreName}
-      onChange={(e) => setNewStoreName(e.target.value)}
-      placeholder="예: 홍대 A소품샵"
-      style={{ flex: 1, padding: 8 }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") addStore();
-      }}
-    />
-
-    <button onClick={addStore} disabled={loading} style={{ padding: "8px 12px" }}>
-      추가
-    </button>
-  </div>
-</div>
-
-        </section>
-  
-        {/* ✅ 백업/복구 */}
-        <section style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
-          <div className="masterCard" style={{ minWidth: 280, flex: 1 }}>
-            <h3 style={{ marginTop: 0 }}>백업 / 복구</h3>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
-              <button onClick={handleBackup} style={{ padding: "8px 12px" }}>
-                백업(JSON 다운로드)
-              </button>
-  
-              <button onClick={() => fileInputRef.current?.click()} style={{ padding: "8px 12px" }}>
-                복구(JSON 가져오기)
-              </button>
-  
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/json"
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleRestore(f);
-                }}
-              />
-            </div>
-  
-            <p style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
-              * 백업은 “현재 DB 데이터 기준”으로 export 하는 용도.
-            </p>
-          </div>
-        </section>
-  
-        {/* ✅ 입점처별 취급 제품 설정 */}
-<section className="masterCard" style={{ marginBottom: 16 }}>
-  <h3 style={{ marginTop: 0 }}>입점처별 취급 제품 설정</h3>
-
-  <p style={{ marginTop: 0, color: "#666", fontSize: 13 }}>
-    입점처마다 입고하는 제품이 다르면 여기서 ON/OFF로 관리해. (OFF면 대시보드에서 숨김 + 제작 계산 제외)
-  </p>
-
-  {stores.length === 0 ? (
-    <p style={{ color: "#666" }}>입점처가 없어. 먼저 입점처를 추가해줘.</p>
-  ) : products.length === 0 ? (
-    <p style={{ color: "#666" }}>제품이 없어. 먼저 제품을 추가해줘.</p>
-  ) : (
-    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-      <select
-        value={manageStoreId}
-        onChange={(e) => setManageStoreId(e.target.value)}
-        style={{ padding: 8, minWidth: 220 }}
-      >
-        <option value="">(입점처 선택)</option>
-        {stores.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-          </option>
-        ))}
-      </select>
-
-      {!manageStoreId ? (
-        <span style={{ color: "#666", fontSize: 13 }}>입점처를 선택하면 제품 ON/OFF 목록이 보여.</span>
-      ) : (
-        <span style={{ color: "#111827", fontSize: 13, fontWeight: 700 }}>
-          선택됨: {stores.find((s) => s.id === manageStoreId)?.name}
-        </span>
-      )}
-    </div>
-  )}
-
-  {!!manageStoreId && (
-    <div style={{ marginTop: 12, borderTop: "1px solid #eee", paddingTop: 12 }}>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <button type="button" onClick={() => toggleAll(manageStoreId, true)} style={{ padding: "6px 10px" }}>
-          전체 ON
-        </button>
-
-        <button type="button" onClick={() => toggleAll(manageStoreId, false)} style={{ padding: "6px 10px" }}>
-          전체 OFF
-        </button>
-      </div>
-
-      <div style={{ marginTop: 10 }}>
-      {(() => {
-  // ✅ 활성 제품만 대상
-  const activeProducts = products.filter((p) => p.active);
-
-  // ✅ 카테고리별 그룹핑
-  const groups = new Map<string, Product[]>();
-  for (const p of activeProducts) {
-    const cat = (p.category ?? "미분류").trim() || "미분류";
-    const arr = groups.get(cat) ?? [];
-    arr.push(p);
-    groups.set(cat, arr);
-  }
-
-  // ✅ 카테고리 정렬 (가나다)
-  const cats = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b, "ko"));
-
-  return (
-    <div style={{ marginTop: 10 }}>
-      {cats.map((cat) => {
-        const list = groups.get(cat) ?? [];
-
-        // ✅ 제품명 가나다 정렬(같은 카테고리 내)
-        const sorted = [...list].sort((a, b) => a.name.localeCompare(b.name, "ko"));
-
-        // ✅ 기본값: 처음엔 펼쳐진 상태(원하면 false로 바꿔도 됨)
-        const isOpen = openStoreCats[cat] ?? false;
-
-        // ✅ ON 개수 표시
-        const onCount = sorted.reduce((acc, p) => (isEnabledInStore(manageStoreId, p.id) ? acc + 1 : acc), 0);
-
-        return (
-          <div
-            key={cat}
-            style={{
-              border: "1px solid rgba(0,0,0,0.08)",
-              borderRadius: 12,
-              background: "#fff",
-              marginBottom: 10,
-              overflow: "hidden",
-            }}
-          >
-            {/* 카테고리 헤더 */}
-            <button
-              type="button"
-              onClick={() =>
-                setOpenStoreCats((prev) => ({
-                  ...prev,
-                  [cat]: !(prev[cat] ?? true),
-                }))
-              }
-              style={{
-                width: "100%",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-                padding: "10px 12px",
-                background: "rgba(17, 24, 39, 0.02)",
-                border: "none",
-                cursor: "pointer",
-                fontWeight: 900,
-                textAlign: "left",
-              }}
+    {filteredProducts.length === 0 ? (
+      <p className="ui-muted">선택한 카테고리에 제품이 없어.</p>
+    ) : (
+      <>
+        <ul className="list-none p-0 m-0 divide-y divide-border">
+          {pagedProducts.map((p) => (
+            <li
+              key={p.id}
+              className={`flex items-start justify-between gap-3 py-1.5 ${
+                p.active ? (p.makeEnabled === false ? "opacity-70" : "") : "opacity-50"
+              }`}
             >
-              <span style={{ color: "#111827" }}>
-                {cat}{" "}
-                <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>
-                  ({onCount}/{sorted.length} ON)
-                </span>
-              </span>
+              {/* ✅ 왼쪽: 제품 정보 */}
+              <div className="min-w-0 flex-1">
+                {editingProductId === p.id ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className="ui-select w-[140px]"
+                      value={editingProductCategory}
+                      onChange={(e) => setEditingProductCategory(e.target.value)}
+                    >
+                      <option value="">미분류</option>
+                      {categoryOptions.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
 
-              <span style={{ color: "#6b7280", fontWeight: 900 }}>
-                {isOpen ? "▾" : "▸"}
-              </span>
-            </button>
+                    <input
+                      className="ui-input flex-1 min-w-[200px]"
+                      value={editingProductName}
+                      autoFocus
+                      onChange={(e) => setEditingProductName(e.target.value)}
+                      placeholder="제품명"
+                      onKeyDown={async (e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          await saveProductFields(p.id, editingProductName, editingProductCategory)
+                          setEditingProductId(null)
+                        } else if (e.key === "Escape") {
+                          e.preventDefault()
+                          setEditingProductName(editingOriginalRef.current)
+                          setEditingProductCategory(editingOriginalCategoryRef.current)
+                          setEditingProductId(null)
+                        }
+                      }}
+                    />
 
-            {/* 카테고리 바디 */}
-            {isOpen && (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {sorted.map((p) => {
-                  const enabled = isEnabledInStore(manageStoreId, p.id);
-
-                  return (
-                    <li
-                      key={p.id}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "8px 12px",
-                        borderTop: "1px solid rgba(0,0,0,0.06)",
-                        opacity: enabled ? 1 : 0.45,
+                    <button
+                      type="button"
+                      className="ui-icon-btn"
+                      title="저장"
+                      onClick={async () => {
+                        await saveProductFields(p.id, editingProductName, editingProductCategory)
+                        setEditingProductId(null)
                       }}
                     >
-                      <div>
-                        <strong>{p.name}</strong>
-                        <div style={{ fontSize: 12, color: "#666" }}>
-                          {enabled ? "ON (취급)" : "OFF (미취급)"}
-                        </div>
-                      </div>
+                      ✓
+                    </button>
 
-                      <button
-                        type="button"
-                        onClick={() => toggleOne(manageStoreId, p.id, !enabled)}
-                        style={{
-                          padding: "6px 10px",
-                          borderRadius: 8,
-                          border: "1px solid #ddd",
-                          background: enabled ? "#111827" : "white",
-                          color: enabled ? "white" : "#111827",
-                          fontWeight: 700,
-                          cursor: "pointer",
-                        }}
-                      >
-                        {enabled ? "OFF" : "ON"}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-})()}
+                    <button
+                      type="button"
+                      className="ui-icon-btn"
+                      title="취소"
+                      onClick={() => {
+                        setEditingProductName(editingOriginalRef.current)
+                        setEditingProductCategory(editingOriginalCategoryRef.current)
+                        setEditingProductId(null)
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 min-w-0">
+                    <strong className="truncate text-sm">
+                      [{p.category ?? "미분류"}] {p.name}
+                    </strong>
 
-      </div>
-    </div>
-  )}
-</section>
+                    <button
+                      type="button"
+                      className="ui-icon-btn"
+                      title="제품명/카테고리 수정"
+                      onClick={() => {
+                        setEditingProductId(p.id)
+                        setEditingProductName(p.name)
+                        editingOriginalRef.current = p.name
+                        setEditingProductCategory(p.category ?? "")
+                        editingOriginalCategoryRef.current = p.category ?? ""
+                      }}
+                    >
+                      ✎
+                    </button>
+                  </div>
+                )}
 
-  
-        {/* ✅ 하단: 제품 목록 / 입점처 목록 */}
-        <section
-          className="masterTwoCol"
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)",
-            gap: 16,
-            alignItems: "start",
-          }}
-        >
-          {/* ============================
-              ✅ 제품 목록 (카테고리 + 페이지네이션)
-             ============================ */}
-          <div className="masterCard" style={{ minWidth: 0 }}>
-            <h3 style={{ marginTop: 0 }}>제품 목록</h3>
-  
-            {/* ✅ 카테고리 필터 */}
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                alignItems: "center",
-                flexWrap: "wrap",
-                marginBottom: 10,
-              }}
-            >
-              <span style={{ fontSize: 12, color: "#6b7280" }}>카테고리:</span>
-  
-              <select
-                value={productListCategory}
-                onChange={(e) => setProductListCategory(e.target.value)}
-                style={{
-                  padding: "6px 10px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(0,0,0,0.12)",
-                }}
-              >
-                <option value="all">전체</option>
-                <option value="uncategorized">미분류</option>
-                {categoryOptions.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-  
-              <span style={{ fontSize: 12, color: "#6b7280" }}>
-                {filteredProducts.length === 0
-                  ? "0개"
-                  : `${Math.min((productListPage - 1) * ITEMS_PER_PAGE + 1, filteredProducts.length)}-${Math.min(
-                      productListPage * ITEMS_PER_PAGE,
-                      filteredProducts.length
-                    )} / ${filteredProducts.length}개`}
-              </span>
-            </div>
-  
-            {filteredProducts.length === 0 ? (
-  <p style={{ color: "#666" }}>선택한 카테고리에 제품이 없어.</p>
-) : (
-  <>
-    <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-      {pagedProducts.map((p) => (
-        <li
-          key={p.id}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 8,
-            padding: "8px 0",
-            borderBottom: "1px solid rgba(0,0,0,0.06)",
-            opacity: p.active ? (p.makeEnabled === false ? 0.6 : 1) : 0.4,
-          }}
-        >
-          {/* ✅ 왼쪽: 제품 정보 */}
-<div className="productLeft">
-  <div className="productNameCol">
-    {editingProductId === p.id ? (
-      <div className="productEditRow">
-        <select
-          className="productCategorySelect"
-          value={editingProductCategory}
-          onChange={(e) => setEditingProductCategory(e.target.value)}
-        >
-          <option value="">미분류</option>
-          {categoryOptions.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {p.active ? "활성" : "비활성"}
+                  {p.makeEnabled === false ? " · 제작중지" : ""}
+                </div>
+              </div>
+
+              {/* ✅ 오른쪽: 액션 */}
+              <div className="flex flex-col items-end gap-2">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground select-none">
+                  <input
+                    type="checkbox"
+                    checked={p.makeEnabled !== false}
+                    onChange={() => toggleProductMakeEnabled(p.id)}
+                  />
+                  제작대상
+                </label>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className={p.active ? "ui-btn-outline" : "ui-btn"}
+                    onClick={() => toggleProductActive(p.id)}
+                  >
+                    {p.active ? "비활성" : "활성"}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="ui-btn-danger"
+                    onClick={() => deleteProduct(p.id)}
+                    disabled={loading}
+                    title="삭제"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            </li>
           ))}
-        </select>
+        </ul>
 
-        <input
-          className="productNameInput"
-          value={editingProductName}
-          autoFocus
-          onChange={(e) => setEditingProductName(e.target.value)}
-          placeholder="제품명"
-          onKeyDown={async (e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              await saveProductFields(p.id, editingProductName, editingProductCategory);
-              setEditingProductId(null);
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              setEditingProductName(editingOriginalRef.current);
-              setEditingProductCategory(editingOriginalCategoryRef.current);
-              setEditingProductId(null);
-            }
-          }}
-        />
+        {/* ✅ 페이지네이션 */}
+        {totalPages > 1 && (
+          <div className="flex flex-wrap justify-center gap-2 pt-2">
+            {Array.from({ length: totalPages }).map((_, idx) => {
+              const pageNum = idx + 1
+              const active = pageNum === productListPage
 
-        <button
-          type="button"
-          className="iconBtn"
-          title="저장"
-          onClick={async () => {
-            await saveProductFields(p.id, editingProductName, editingProductCategory);
-            setEditingProductId(null);
-          }}
-        >
-          ✓
-        </button>
-
-        <button
-          type="button"
-          className="iconBtn"
-          title="취소"
-          onClick={() => {
-            setEditingProductName(editingOriginalRef.current);
-            setEditingProductCategory(editingOriginalCategoryRef.current);
-            setEditingProductId(null);
-          }}
-        >
-          ✕
-        </button>
-      </div>
-    ) : (
-      <div className="productNameRow">
-        <strong className="productNameText">
-          [{p.category ?? "미분류"}] {p.name}
-        </strong>
-
-        <button
-          type="button"
-          className="iconBtn"
-          title="제품명/카테고리 수정"
-          onClick={() => {
-            setEditingProductId(p.id);
-            setEditingProductName(p.name);
-            editingOriginalRef.current = p.name;
-            setEditingProductCategory(p.category ?? "");
-            editingOriginalCategoryRef.current = p.category ?? "";
-          }}
-        >
-          ✎
-        </button>
-      </div>
+              return (
+                <button
+                  key={pageNum}
+                  type="button"
+                  onClick={() => setProductListPage(pageNum)}
+                  className={active ? "ui-btn" : "ui-btn-outline"}
+                >
+                  {pageNum}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </>
     )}
   </div>
-
-  <span style={{ fontSize: 12, color: "#666" }}>
-    {p.active ? "활성" : "비활성"}
-    {p.makeEnabled === false ? " · 제작중지" : ""}
-  </span>
 </div>
-
-{/* ✅ 오른쪽: 액션 */}
-<div className="productActions">
-  <label className="makeEnabledWrap">
-    <input
-      type="checkbox"
-      checked={p.makeEnabled !== false}
-      onChange={() => toggleProductMakeEnabled(p.id)}
-    />
-    제작대상
-  </label>
-
-  <div className="actionButtons">
-    <button
-      type="button"
-      className={`iconBtn iconBtnText ${p.active ? "iconBtnMuted" : "iconBtnPrimary"}`}
-      onClick={() => toggleProductActive(p.id)}
-    >
-      {p.active ? "비활성" : "활성"}
-    </button>
-
-    <button
-      type="button"
-      className="iconBtn iconBtnDanger iconBtnSmall"
-      onClick={() => deleteProduct(p.id)}
-      disabled={loading}
-    >
-      ✕
-    </button>
-  </div>
-</div>
-
-        </li>
-      ))}
-    </ul>
-
-    {/* ✅ 페이지네이션 */}
-    {totalPages > 1 && (
-      <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
-        {Array.from({ length: totalPages }).map((_, idx) => {
-          const pageNum = idx + 1;
-          const active = pageNum === productListPage;
-
-          return (
-            <button
-              key={pageNum}
-              type="button"
-              onClick={() => setProductListPage(pageNum)}
-              style={{
-                padding: "6px 10px",
-                borderRadius: 10,
-                border: "1px solid rgba(0,0,0,0.12)",
-                background: active ? "#111827" : "#fff",
-                color: active ? "#fff" : "#111827",
-                fontWeight: 800,
-                cursor: "pointer",
-                minWidth: 36,
-              }}
-            >
-              {pageNum}
-            </button>
-          );
-        })}
-      </div>
-    )}
-  </>
-)}
-          </div>  {/* ✅ 제품 목록 카드 닫기 */}
 
 {/* ============================
     ✅ 입점처 목록
    ============================ */}
-<div className="masterCard" style={{ minWidth: 0 }}>
-  <h3 style={{ marginTop: 0 }}>입점처 목록</h3>
+<div className="ui-card min-w-0">
+  <div className="ui-card-body space-y-3">
+    <h3 className="text-base font-semibold m-0">입점처 목록</h3>
 
-  {stores.length === 0 ? (
-    <p style={{ color: "#666" }}>아직 입점처가 없어. 위에서 추가해봐.</p>
-  ) : (
-    <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-      {stores.map((s) => (
-        <li
-          key={s.id}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 8,
-            padding: "8px 0",
-            borderBottom: "1px solid #eee",
-          }}
-        >
-          <strong>{s.name}</strong>
-          <button onClick={() => deleteStore(s.id)} style={{ padding: "6px 10px" }}>
-            삭제
-          </button>
-        </li>
-      ))}
-    </ul>
-  )}
+    {stores.length === 0 ? (
+      <p className="ui-muted">아직 입점처가 없어. 위에서 추가해봐.</p>
+    ) : (
+      <ul className="list-none p-0 m-0 divide-y divide-border">
+        {stores.map((s) => (
+          <li key={s.id} className="flex items-center justify-between gap-3 py-2">
+            <strong className="text-sm">{s.name}</strong>
+
+            <button
+              type="button"
+              className="ui-btn-danger"
+              onClick={() => deleteStore(s.id)}
+              title="삭제"
+            >
+              ✕
+            </button>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
 </div>
 </section>
   </div>
