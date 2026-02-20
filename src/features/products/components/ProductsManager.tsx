@@ -240,16 +240,25 @@ export default function ProductsManager() {
       })
       return next
     })
+
+  // ✅ 연속 조작 후 멈췄을 때 자동 저장
+  scheduleAutoSave()
   }
 
   // ====== Save all dirty changes ======
   const [savingBulk, setSavingBulk] = useState(false)
 
-  const saveAllDirty = async () => {
+  const [autoSaving, setAutoSaving] = useState(false)
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null)
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const saveAllDirty = useCallback(async () => {
     const dirty = Array.from(dirtyMapRef.current.values())
     if (dirty.length === 0) return
+  
     try {
-      setSavingBulk(true)
+      setAutoSaving(true)
+  
       await upsertProductsBulkDB({
         products: dirty.map((p: any) => ({
           id: p.id,
@@ -262,15 +271,37 @@ export default function ProductsManager() {
           barcode: p.barcode ?? null,
         })),
       })
-      toast.success(`제품 변경 ${dirty.length}건을 저장했어요.`)
+  
+      // ✅ 저장 완료되면 dirty 비우기
+      dirtyMapRef.current = new Map()
+      setDirtyCount(0)
+      setLastSavedAt(Date.now())
+  
+      // ✅ DB 최신값 동기화(너무 자주 치지 않게, 여기선 1회만)
       await a.refresh()
     } catch (e: any) {
       console.error(e)
-      toast.error(`저장 실패: ${e?.message ?? e}`)
+      toast.error(`자동 저장 실패: ${e?.message ?? e}`)
     } finally {
-      setSavingBulk(false)
+      setAutoSaving(false)
     }
-  }
+  }, [a])
+
+  const scheduleAutoSave = useCallback(() => {
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+  
+    // 마지막 조작 후 800ms 지나면 1번만 저장
+    autoSaveTimerRef.current = setTimeout(() => {
+      autoSaveTimerRef.current = null
+      saveAllDirty()
+    }, 800)
+  }, [saveAllDirty])
+  
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+    }
+  }, [])
 
   // ====== bulk delete selected ======
   const selectedCount = selectedIds.size
@@ -329,27 +360,29 @@ export default function ProductsManager() {
 
       {/* 상단: 저장/선택삭제 */}
       <div className="flex flex-wrap items-center gap-2">
-        {dirtyCount > 0 ? (
-          <AppButton type="button" onClick={saveAllDirty} disabled={savingBulk}>
-            {savingBulk ? "저장 중…" : `변경사항 저장 (${dirtyCount})`}
-          </AppButton>
-        ) : (
-          <AppButton type="button" variant="outline" disabled>
-            변경사항 없음
-          </AppButton>
-        )}
+  <div className="text-sm text-muted-foreground">
+    {autoSaving ? (
+      "동기화 중…"
+    ) : dirtyCount > 0 ? (
+      "변경됨 (곧 자동 저장)"
+    ) : lastSavedAt ? (
+      "저장됨"
+    ) : (
+      " "
+    )}
+  </div>
 
-        {selectedCount > 0 ? (
-          <AppButton
-            type="button"
-            variant="outline"
-            className="text-destructive"
-            onClick={() => setBulkDeleteOpen(true)}
-          >
-            선택 삭제 ({selectedCount})
-          </AppButton>
-        ) : null}
-      </div>
+  {selectedCount > 0 ? (
+    <AppButton
+      type="button"
+      variant="outline"
+      className="text-destructive"
+      onClick={() => setBulkDeleteOpen(true)}
+    >
+      선택 삭제 ({selectedCount})
+    </AppButton>
+  ) : null}
+</div>
 
       {/* 제품 추가 / CSV (A만 유지) */}
       <div className="rounded-xl border bg-card/60 p-4 space-y-3">
@@ -725,7 +758,7 @@ export default function ProductsManager() {
                                     barcode: editingBarcode,
                                   })
                                   a.setEditingProductId(null)
-                                  toast.success("로컬에 반영했어요. 상단에서 저장하세요.")
+                                  toast.success("반영됐어요. 잠시 후 자동 저장됩니다.")
                                 }}
                               >
                                 적용

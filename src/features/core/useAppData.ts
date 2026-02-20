@@ -183,7 +183,7 @@ export function useAppData() {
   const [data, setData] = useState<AppData>(EMPTY)
   const [loading, setLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-
+  const [syncing, setSyncing] = useState(false)
   // ✅ refresh 중복 호출 방지
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
   const refreshQueuedRef = useRef(false)
