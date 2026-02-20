@@ -14,6 +14,8 @@ const SettingsPage = lazy(() => import("./features/settings/pages/SettingsPage")
 const MarginCalculatorPage = lazy(() => import("./features/margin/pages/MarginCalculatorPage"))
 const SettlementsPage = lazy(() => import("./features/settlements/pages/SettlementsPage"))
 const AdminInvitesPage = lazy(() => import("./pages_legacy/AdminInvites"))
+const LoginPage = lazy(() => import("./pages_legacy/Login"))
+const InviteGatePage = lazy(() => import("./pages_legacy/InviteGate"))
 
 import { supabase, getOrCreateMyProfile } from "./lib/supabaseClient"
 
@@ -111,9 +113,12 @@ export default function App() {
 
   if (!session) {
     return (
-      <Routes>
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
+      <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </Suspense>
     )
   }  
 
@@ -122,12 +127,14 @@ export default function App() {
     return <div className="app-loading">초대 여부 확인 중…</div>
   }
 
-  // ✅ 5) 관리자면 초대 없이 통과, 일반 유저는 초대 필요
   if (!isAdmin && profile.is_invited !== true) {
     return (
-      <Routes>
-        <Route path="*" element={<Navigate to="/settings" replace />} />
-      </Routes>
+      <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
+        <Routes>
+          <Route path="/invite" element={<InviteGatePage />} />
+          <Route path="*" element={<Navigate to="/invite" replace />} />
+        </Routes>
+      </Suspense>
     )
   }  
 
@@ -154,6 +161,16 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/margin" element={<MarginCalculatorPage />} />
           <Route path="/settlements" element={<SettlementsPage />} />
+          <Route
+  path="/invite"
+  element={
+    !isAdmin && profile.is_invited !== true ? (
+      <InviteGatePage />
+    ) : (
+      <Navigate to="/dashboard" replace />
+    )
+  }
+/>
           {/* Admin */}
 <Route
   path="/admin/invites"
