@@ -23,6 +23,7 @@ import {
   upsertProductsBulkDB,
 } from "@/data/store.supabase"
 import {
+  supabase,
   getOrCreateMyProfile,
   updateMyDefaultTargetQty,
   updateMyLowStockThreshold,
@@ -162,6 +163,22 @@ function downloadCsv(filename: string, csvBody: string) {
   URL.revokeObjectURL(url)
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+async function withOneRetryOnFetch<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch (e: any) {
+    const msg = String(e?.message ?? e)
+    // 브라우저 네트워크/프리플라이트/세션 레이스 등에서 흔히 발생
+    if (msg.includes("Failed to fetch")) {
+      await sleep(350)
+      return await fn()
+    }
+    throw e
+  }
+}
+
 export function useAppData() {
   const [data, setData] = useState<AppData>(EMPTY)
   const [loading, setLoading] = useState(true)
@@ -171,6 +188,8 @@ export function useAppData() {
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
   const refreshQueuedRef = useRef(false)
   
+// ✅ seed(스토어×제품 상태) 호출 최소화: store/product id 목록이 바뀔 때만 실행
+const seedKeyRef = useRef<string>("")
 
   // ✅ 유저별 설정
   const [defaultTargetQtyInput, setDefaultTargetQtyInput] = useState<string>("5")
@@ -227,63 +246,93 @@ const [newStoreMemo, setNewStoreMemo] = useState<string>("")
   )
 
   // ===== profile bootstrap =====
-  useEffect(() => {
-    let alive = true
+useEffect(() => {
+  let alive = true
 
-    ;(async () => {
-      try {
-        setProfileLoading(true)
-        const profile = await getOrCreateMyProfile()
-        if (!alive) return
-        setDefaultTargetQtyInput(String(profile.default_target_qty))
-        setLowStockThresholdInput(String(profile.low_stock_threshold ?? 2))
-      } catch (e) {
-        console.error("[profiles] failed to load profile", e)
-      } finally {
-        if (alive) setProfileLoading(false)
-      }
-    })()
+  ;(async () => {
+    try {
+      setProfileLoading(true)
 
-    return () => {
-      alive = false
+      const profile = await withOneRetryOnFetch(async () => {
+        // ✅ 세션이 실제로 준비된 다음에만 프로필 RPC/쿼리 진행
+        const { data: s } = await supabase.auth.getSession()
+        if (!s.session) throw new Error("not_authenticated")
+        return await getOrCreateMyProfile()
+      })
+
+      if (!alive) return
+      setDefaultTargetQtyInput(String(profile.default_target_qty))
+      setLowStockThresholdInput(String(profile.low_stock_threshold ?? 2))
+    } catch (e) {
+      console.error("[profiles] failed to load profile", e)
+    } finally {
+      if (alive) setProfileLoading(false)
     }
-  }, [])
+  })()
 
-  const refresh = useCallback(async () => {
-    if (refreshInFlightRef.current) {
-      refreshQueuedRef.current = true
-      return refreshInFlightRef.current
-    }
+  return () => {
+    alive = false
+  }
+}, [])
 
-    const p = (async () => {
-      setLoading(true)
-      setErrorMsg(null)
-      try {
+const refresh = useCallback(async () => {
+  if (refreshInFlightRef.current) {
+    refreshQueuedRef.current = true
+    return refreshInFlightRef.current
+  }
+
+  const p = (async () => {
+    setLoading(true)
+    setErrorMsg(null)
+
+    try {
+      await withOneRetryOnFetch(async () => {
+        // ✅ 세션 준비 확인(로그인 직후 레이스 방지)
+        const { data: s } = await supabase.auth.getSession()
+        if (!s.session) throw new Error("not_authenticated")
+    
         const next = await loadDataFromDB()
         setData(next)
-        await ensureStoreProductStatesSeedDB({
-          storeIds: next.stores.map((s) => s.id),
-          productIds: next.products.map((p) => p.id),
-        })
+    
+        // ✅ seed는 store/product 조합이 바뀔 때만 실행
+        const storeIds = next.stores.map((s) => s.id).sort()
+        const productIds = next.products.map((p) => p.id).sort()
+        const nextSeedKey = `${storeIds.join(",")}||${productIds.join(",")}`
+    
+        if (nextSeedKey !== seedKeyRef.current) {
+          seedKeyRef.current = nextSeedKey
+    
+          await ensureStoreProductStatesSeedDB({
+            storeIds,
+            productIds,
+          })
+        }
+    
         const cats = await loadCategoriesDB()
         setCategories(cats)
-      } catch (e: any) {
-        console.error(e)
-        setErrorMsg(e?.message ?? "데이터 로드 실패")
-      } finally {
-        setLoading(false)
-      }
-    })()
-
-    refreshInFlightRef.current = p
-    await p
-    refreshInFlightRef.current = null
-
-    if (refreshQueuedRef.current) {
-      refreshQueuedRef.current = false
-      await refresh()
+      })
+    } catch (e: any) {
+      console.error(e)
+      const msg = String(e?.message ?? e)
+      setErrorMsg(
+        msg.includes("Failed to fetch")
+          ? "네트워크 연결이 잠시 불안정해요. 잠시 후 다시 시도해 주세요."
+          : msg
+      )
+    } finally {
+      setLoading(false)
     }
-  }, [])
+  })()
+
+  refreshInFlightRef.current = p
+  await p
+  refreshInFlightRef.current = null
+
+  if (refreshQueuedRef.current) {
+    refreshQueuedRef.current = false
+    await refresh()
+  }
+}, [])
 
   useEffect(() => {
     refresh()

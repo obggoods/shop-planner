@@ -126,6 +126,7 @@ export async function ensureStoreProductStatesSeedDB(input: {
   const userId = await requireUserId()
   if (input.storeIds.length === 0 || input.productIds.length === 0) return
 
+  // 1) 이미 존재하는 조합을 미리 제외 (불필요한 업서트 최소화)
   const { data: existing, error } = await supabase
     .from("store_product_states")
     .select("store_id,product_id")
@@ -157,8 +158,45 @@ export async function ensureStoreProductStatesSeedDB(input: {
 
   if (rows.length === 0) return
 
-  const { error: insErr } = await supabase.from("store_product_states").insert(rows)
-  if (insErr) throw insErr
+  // 2) 동시성(레이스)에서도 안전하게: 중복이면 그냥 무시
+  //    - Supabase는 upsert + ignoreDuplicates 조합으로 "ON CONFLICT DO NOTHING"을 구현 가능
+  //    - onConflict는 실제 유니크/PK 컬럼 조합과 맞아야 함.
+  //    - 프로젝트 구조상 user별 데이터이므로 보통 (user_id, store_id, product_id) 형태가 정석.
+  const CHUNK = 500
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK)
+
+    // 1차 시도: (user_id, store_id, product_id)
+    let { error: upErr } = await supabase
+      .from("store_product_states")
+      .upsert(chunk, {
+        onConflict: "user_id,store_id,product_id",
+        ignoreDuplicates: true,
+      })
+
+    // 만약 실제 PK가 (store_id, product_id)라면 위 onConflict가 맞지 않아 에러가 날 수 있음.
+    // 그 경우 2차로 (store_id, product_id)로 재시도해 안전하게 통과시킴.
+    if (upErr) {
+      const msg = String((upErr as any)?.message ?? upErr)
+      const looksLikeConflictSpecIssue =
+        msg.includes("onConflict") ||
+        msg.includes("column") ||
+        msg.includes("constraint") ||
+        msg.includes("does not exist")
+
+      if (looksLikeConflictSpecIssue) {
+        const retry = await supabase
+          .from("store_product_states")
+          .upsert(chunk, {
+            onConflict: "store_id,product_id",
+            ignoreDuplicates: true,
+          })
+        if (retry.error) throw retry.error
+      } else {
+        throw upErr
+      }
+    }
+  }
 }
 
 /* =========================
