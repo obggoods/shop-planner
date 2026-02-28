@@ -666,7 +666,7 @@ await upsertInventoryItemsBatchDB(updates)
 
       <AppCard
         density="compact"
-        title="정산 CSV 업로드"
+        title="새 정산 추가"
         description="CSV 업로드 → 입점처/월 선택 → 컬럼 매핑(바코드/수량/금액) → 미리보기 → v2 정산 저장"
         action={
           <div className="flex flex-wrap items-center gap-2">
