@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { upsertInventoryItemDB } from "@/data/store.supabase"
 import { useAppData } from "@/features/core/useAppData"
 import { toast } from "@/lib/toast"
-
+import MarketplacePerformance from "@/features/dashboard/components/MarketplacePerformance"
 import { AppButton } from "@/components/app/AppButton"
 import { AppCard } from "@/components/app/AppCard"
 import { AppSelect } from "@/components/app/AppSelect"
@@ -48,6 +48,10 @@ function downloadCSV(filename: string, rows: string[][]) {
 function DashboardViewInner() {
   const a = useAppData()
   const data = a.data
+
+  const s0 = (data as any).settlementsV2?.[0]
+console.log("[debug] settlementsV2 first", s0)
+console.log("[debug] created_at", s0?.created_at, "period_month", s0?.period_month)
 
   const loading = a.loading
   const errorMsg = a.errorMsg
@@ -516,6 +520,13 @@ const makeNeedProductCount = useMemo(() => {
   </div>
 </AppCard>
       </div>
+
+      <MarketplacePerformance
+  settlements={(data as any).settlementsV2 ?? []}
+  marketplaces={stores.map((s: any) => ({ id: String(s.id), name: String(s.name ?? "입점처") }))}
+  userPlan={"basic"}  // TODO: 실제 플랜 붙이면 여기 교체
+  isLoading={loading}
+/>
 
       {/* 재고/제작 */}
       <AppCard className="shadow-sm">
